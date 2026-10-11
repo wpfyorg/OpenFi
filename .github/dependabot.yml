@@ -1,16 +1,26 @@
 version: 2
+multi-ecosystem-groups:
+  routine:
+    schedule:
+      interval: weekly
+
 updates:
   - package-ecosystem: cargo
     directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+    patterns:
+      - "*"
+    multi-ecosystem-group: routine
   - package-ecosystem: npm
     directory: /web
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+    patterns:
+      - "*"
+    multi-ecosystem-group: routine
+    ignore:
+      - dependency-name: preact
+        update-types:
+          - version-update:semver-major
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: monthly
+    patterns:
+      - "*"
+    multi-ecosystem-group: routine
