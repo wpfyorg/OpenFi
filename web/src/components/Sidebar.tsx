@@ -14,7 +14,7 @@ export function Sidebar({ hash, open, onNavigate }: { hash: string; open: boolea
         <div class="brand">
           <div class="brand-mark">fi</div>
           <div class="brand-name">
-            <strong>OpenWrtFi</strong>
+            <strong>OpenFi</strong>
             <span>home &middot; {nodes.length || "–"} nodes</span>
           </div>
         </div>

@@ -2,7 +2,9 @@
 name = "openwrtfi"
 version = "0.1.0"
 edition = "2024"
-description = "UniFi-style dashboard for OpenWrt, small enough to run on the router"
+description = "OpenFi: dashboard and configuration interface for OpenWrt"
+repository = "https://github.com/wpfyorg/OpenFi"
+readme = "README.md"
 license = "MIT"
 
 [dependencies]

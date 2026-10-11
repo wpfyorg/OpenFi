@@ -14,3 +14,6 @@
 *.pfx
 secrets/
 private-backups/
+
+# Local session checkpoints
+.claude-checkpoints/

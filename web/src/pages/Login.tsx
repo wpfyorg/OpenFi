@@ -36,7 +36,7 @@ export default function Login() {
 
   return (
     <div class="page page-center login-page" style={{ "--section": "#4E8BFF" }}>
-      <PageHeader icon="log-in" title="Sign in" subtitle="OpenWrtFi control panel" />
+      <PageHeader icon="log-in" title="Sign in" subtitle="OpenFi control panel" />
       <form class="panel login-form" onSubmit={submit}>
         <div class="field">
           <label for="login-username">Username</label>

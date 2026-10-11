@@ -1,0 +1,33 @@
+name: Support question
+description: Ask a non-security usage question
+title: "[Support]: "
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not post passwords, tokens, session cookies, Wi-Fi keys, public IPs, MAC addresses, serial numbers, or unredacted router data. For vulnerabilities, use the private process in [SECURITY.md](https://github.com/wpfyorg/OpenFi/blob/main/SECURITY.md)."
+  - type: input
+    id: version
+    attributes:
+      label: OpenFi version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried, and what happened?
+    validations:
+      required: true
+  - type: textarea
+    id: sanitized
+    attributes:
+      label: Sanitized context
+      description: Relevant versions, safe steps, or redacted logs. Remove secrets and identifiers.
+    validations:
+      required: false
