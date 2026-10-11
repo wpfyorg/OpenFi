@@ -11,3 +11,7 @@ These are repository-owner steps; files alone do not enable GitHub settings.
 7. Publish a release only with a tag, release notes, target/firmware validation, installation/recovery instructions and checksums for distributed binaries. Local host builds do not validate router releases.
 
 Current release status: experimental 0.1.0 source. There is no supported hardware/firmware matrix or universal installation package yet. The contribution, support and security policies avoid guaranteed response times.
+
+Routine Cargo, npm, and GitHub Actions version updates are grouped into one weekly Dependabot pull request. Security updates remain enabled and may arrive as separate, ecosystem-specific pull requests.
+
+Preact major updates are deferred while Preact 11 type errors and its removal of implicit `px` units are reviewed. The migration needs a type fix and explicit CSS units for existing numeric inline sizes. Dependabot's Preact major ignore also applies to matching security updates; the security update feature remains enabled for other eligible updates.
