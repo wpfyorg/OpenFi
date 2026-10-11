@@ -27,4 +27,3 @@ The [README slideshow](../../README.md#demo) loops through these six screens, fo
 ## Wi-Fi networks
 
 ![OpenFi Wi-Fi networks design preview](wifi-networks.png)
-
