@@ -25,6 +25,7 @@ Open <http://127.0.0.1:8088>. Mock mode uses the sanitized sample data under [`f
 ## Changes and pull requests
 
 - Keep each pull request focused. Explain the problem, approach, user-visible effects, and any compatibility or security implications.
+- AI-assisted or AI-written code is welcome when you understand and review what you submit. Be ready to explain its behavior and tradeoffs, run relevant checks, and take responsibility for it under the same standards as any contribution.
 - Add or update focused tests for changed behavior. Run `cargo test` and `npm run build --prefix web` when relevant, and report the actual results. Include manual verification steps for UI or router behavior that automated checks do not cover.
 - Do not include credentials, tokens, real device identifiers, private network details, or unredacted router captures. Use the sanitized fixtures or redact reports before attaching them.
 - Link related issues and update [`docs/api.md`](docs/api.md) when changing the API contract. Update [`plan.md`](plan.md) when project status or roadmap changes.
