@@ -6,9 +6,11 @@ An open source dashboard and configuration interface for OpenWrt, built with Rus
 
 ## Demo
 
-Recorded walkthrough with private device and network details redacted. The recording shows earlier OpenWrtFi branding.
+Looping slideshow of the Pen design's exported screens: dashboard, topology, devices, usage, Wi-Fi, and Wi-Fi networks. These are design previews with fictional sample data; they do not establish implemented feature coverage.
 
-https://github.com/user-attachments/assets/b8c3f54a-1296-43e2-833f-78e6a84156b8
+![OpenFi design slideshow: dashboard, topology, devices, usage, Wi-Fi, and Wi-Fi networks](docs/demo/slideshow.gif)
+
+[View the static screens](docs/demo/README.md) for a non-animated preview.
 
 ## What works today
 
