@@ -4,6 +4,12 @@ An open source dashboard and configuration interface for OpenWrt, built with Rus
 
 **Status: experimental, pre-1.0.** Full feature parity with core LuCI is the project goal. It is not complete today. Keep LuCI available for recovery and configuration workflows that OpenFi does not yet cover. OpenFi is an independent project, not an official OpenWrt or Ubiquiti product.
 
+## Demo
+
+Recorded walkthrough with private device and network details redacted. The recording shows earlier OpenWrtFi branding.
+
+https://github.com/user-attachments/assets/b8c3f54a-1296-43e2-833f-78e6a84156b8
+
 ## What works today
 
 - Dashboard, clients, traffic and usage, Wi-Fi and topology views.
