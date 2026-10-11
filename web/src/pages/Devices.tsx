@@ -51,7 +51,7 @@ export default function Devices() {
           <TopTalkersOverTime usage={snap.usage} history={talkHistory} />
           <Panel
             title="All devices"
-            subtitle="Every client OpenWrtFi has seen. Click a row for details and actions."
+            subtitle="Every client OpenFi has seen. Click a row for details and actions."
           >
             <Filters query={query} onQuery={setQuery} conn={conn} onConn={setConn}
               activeOnly={activeOnly} onActiveOnly={setActiveOnly}

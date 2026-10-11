@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include passwords, tokens, session cookies, Wi-Fi keys, public IPs, MAC addresses, serial numbers, or unredacted router data. For security issues, see [SECURITY.md](https://github.com/wpfyorg/OpenFi/blob/main/SECURITY.md) and report privately."
+  - type: input
+    id: version
+    attributes:
+      label: OpenFi version or commit
+      placeholder: Version or short commit hash
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OpenWrt and relevant runtime/browser versions; omit identifying details.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest safe, repeatable set of steps. Mock mode is preferred when suitable.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Remove secrets and device/network identifiers before sharing.
+    validations:
+      required: false

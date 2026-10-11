@@ -34,7 +34,7 @@ export default function SettingsNodes() {
     try {
       await removeConfiguredNode(node.name);
       setNodes((rows) => rows?.filter((n) => n.name !== node.name) ?? null);
-      toast(`${node.name} removed. OpenWrtFi is restarting…`, "success");
+      toast(`${node.name} removed. OpenFi is restarting…`, "success");
     } catch (e) {
       toast(e instanceof Error ? e.message : "Failed to remove node", "error");
     } finally {
@@ -47,7 +47,7 @@ export default function SettingsNodes() {
       <PageHeader
         icon="network"
         title="Nodes"
-        subtitle={nodes ? `${nodes.length} configured node${nodes.length === 1 ? "" : "s"}` : "Access points managed by OpenWrtFi"}
+        subtitle={nodes ? `${nodes.length} configured node${nodes.length === 1 ? "" : "s"}` : "Access points managed by OpenFi"}
         right={<>
           <Button onClick={() => { location.hash = "#/settings/wifi"; }}>WiFi networks</Button>
           <Button primary icon="plus" onClick={() => setAddOpen(true)}>Add AP</Button>
@@ -98,14 +98,14 @@ export default function SettingsNodes() {
           onAdded={(node) => {
             setNodes((rows) => rows ? [...rows, node] : [node]);
             setAddOpen(false);
-            toast(`${node.name} added. OpenWrtFi is restarting…`, "success");
+            toast(`${node.name} added. OpenFi is restarting…`, "success");
           }}
         />
       )}
       {removeNode && (
         <ConfirmDialog
           title={`Remove ${removeNode.name}?`}
-          body={<p>This stops OpenWrtFi from polling and managing <b>{removeNode.name}</b>. Nothing is changed on the access point itself.</p>}
+          body={<p>This stops OpenFi from polling and managing <b>{removeNode.name}</b>. Nothing is changed on the access point itself.</p>}
           confirmLabel="Remove AP"
           danger
           onClose={() => setRemoveNode(null)}
