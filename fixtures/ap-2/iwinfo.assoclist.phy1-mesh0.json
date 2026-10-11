@@ -1,0 +1,20 @@
+{
+  "results": [
+    {
+      "mac": "02:00:00:00:00:07",
+      "signal": -75,
+      "noise": -94,
+      "inactive": 40,
+      "rx": {
+        "rate": 432000,
+        "mcs": 5,
+        "40mhz": false
+      },
+      "tx": {
+        "rate": 432000,
+        "mcs": 5,
+        "40mhz": false
+      }
+    }
+  ]
+}

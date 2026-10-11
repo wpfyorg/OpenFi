@@ -1,0 +1,28 @@
+{
+  "values": {
+    "cfg_client13": {
+      ".name": "cfg_client13",
+      ".type": "host",
+      ".anonymous": false,
+      "mac": "02:00:00:00:00:04",
+      "ip": "192.0.2.48",
+      "name": "Client 13"
+    },
+    "cfg_client05": {
+      ".name": "cfg_device-22eth",
+      ".type": "host",
+      ".anonymous": false,
+      "mac": "02:00:00:00:00:06",
+      "ip": "192.0.2.20",
+      "name": "Client 12 wired"
+    },
+    "cfg_client10": {
+      ".name": "cfg_client10",
+      ".type": "host",
+      ".anonymous": false,
+      "mac": "02:00:00:00:00:03",
+      "ip": "192.0.2.49",
+      "name": "Client 10"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "up": true,
+  "carrier": true,
+  "macaddr": "02:00:00:00:00:08",
+  "statistics": {
+    "rx_bytes": 90000000,
+    "tx_bytes": 70000000
+  }
+}

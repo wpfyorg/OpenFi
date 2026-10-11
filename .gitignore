@@ -1,0 +1,16 @@
+/target
+/web/node_modules
+/web/dist/*
+!/web/dist/.gitkeep
+.DS_Store
+
+# Local credentials and device captures
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+private-backups/

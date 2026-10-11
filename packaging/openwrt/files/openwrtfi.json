@@ -1,0 +1,20 @@
+{
+  "poll_secs": 2,
+  "wan_device": "wan",
+  "dhcp_leases": "/tmp/dhcp.leases",
+  "qos_status_cmd": "/usr/sbin/qos-status",
+  "device_qos_conf": "/etc/device-qos.conf",
+  "daily_usage_file": "/etc/openwrtfi/daily.json",
+  "local_utc_offset_secs": 19800,
+  "audit_log": "/tmp/openwrtfi-audit.log",
+  "adguard": { "url": "http://127.0.0.1:3000", "username": "admin", "password": "CHANGE_ME" },
+  "nodes": [
+    { "name": "mainrouter", "host": "127.0.0.1", "transport": "local" },
+    { "name": "ap-2", "host": "192.168.1.3", "transport": "rpcd", "username": "openwrtfi", "password": "CHANGE_ME", "wired_uplink": "lan1" },
+    { "name": "ap-4", "host": "192.168.1.5", "transport": "rpcd", "username": "openwrtfi", "password": "CHANGE_ME" }
+  ],
+  "shell": {
+    "enabled": false,
+    "_comment": "Off by default (see docs/api.md's Browser shell section and plan.md). Only turn this on once ttyd is running on 127.0.0.1:7681 on the gateway; there is no TLS in this binary, so it only ever works from a loopback connection (an SSH tunnel) even when enabled."
+  }
+}

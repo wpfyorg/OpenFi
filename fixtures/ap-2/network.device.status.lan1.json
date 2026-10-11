@@ -1,0 +1,9 @@
+{
+  "up": true,
+  "carrier": true,
+  "speed": "1000F",
+  "statistics": {
+    "rx_bytes": 620000000,
+    "tx_bytes": 810000000
+  }
+}

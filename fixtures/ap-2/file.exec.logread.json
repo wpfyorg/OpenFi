@@ -1,0 +1,5 @@
+{
+  "code": 0,
+  "stdout": "Thu Sep 24 10:00:01 2026 daemon.info hostapd: phy1-ap0: STA associated\nThu Sep 24 10:00:02 2026 daemon.info hostapd: phy0-ap0: STA associated\nThu Sep 24 10:00:05 2026 daemon.warn usteer: steering candidate found for 02:00:00:00:00:1e\nThu Sep 24 10:00:06 2026 kern.err mt7915e 0000:01:00.0: link down\nThu Sep 24 10:00:07 2026 daemon.info dnsmasq-dhcp[1]: DHCPACK(br-lan) 192.0.2.15\n",
+  "stderr": ""
+}

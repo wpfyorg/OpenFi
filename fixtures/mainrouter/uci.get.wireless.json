@@ -1,0 +1,90 @@
+{
+  "values": {
+    "radio0": {
+      ".name": "radio0",
+      ".type": "wifi-device",
+      ".anonymous": false,
+      "type": "mac80211",
+      "band": "2g",
+      "channel": "6",
+      "htmode": "HE40",
+      "txpower": "20",
+      "disabled": "0"
+    },
+    "radio1": {
+      ".name": "radio1",
+      ".type": "wifi-device",
+      ".anonymous": false,
+      "type": "mac80211",
+      "band": "5g",
+      "channel": "36",
+      "htmode": "HE80",
+      "txpower": "23",
+      "disabled": "0"
+    },
+    "default_radio0": {
+      ".name": "default_radio0",
+      ".type": "wifi-iface",
+      ".anonymous": false,
+      "device": "radio0",
+      "mode": "ap",
+      "ssid": "Example-WiFi-13",
+      "network": "lan",
+      "encryption": "sae-mixed",
+      "key": "REDACTED",
+      "ifname": "phy0-ap0",
+      "ieee80211r": "1",
+      "ft_over_ds": "0",
+      "mobility_domain": "4f57",
+      "ieee80211k": "1",
+      "ieee80211v": "1",
+      "ieee80211w": "1"
+    },
+    "default_radio1": {
+      ".name": "default_radio1",
+      ".type": "wifi-iface",
+      ".anonymous": false,
+      "device": "radio1",
+      "mode": "ap",
+      "ssid": "Example-WiFi-13",
+      "network": "lan",
+      "encryption": "sae-mixed",
+      "key": "REDACTED",
+      "ifname": "phy1-ap0",
+      "ieee80211r": "1",
+      "ft_over_ds": "0",
+      "mobility_domain": "4f57",
+      "ieee80211k": "1",
+      "ieee80211v": "1",
+      "ieee80211w": "1"
+    },
+    "legacy_radio0": {
+      ".name": "legacy_radio0",
+      ".type": "wifi-iface",
+      ".anonymous": false,
+      "device": "radio0",
+      "mode": "ap",
+      "ssid": "Example-Legacy",
+      "network": "lan",
+      "encryption": "psk2",
+      "key": "REDACTED",
+      "ifname": "phy0-ap1",
+      "ieee80211r": "0",
+      "ieee80211k": "0",
+      "ieee80211v": "0",
+      "ieee80211w": "0"
+    },
+    "home_backhaul": {
+      ".name": "home_backhaul",
+      ".type": "wifi-iface",
+      ".anonymous": false,
+      "device": "radio1",
+      "mode": "mesh",
+      "mesh_id": "Example-Backhaul",
+      "network": "lan",
+      "encryption": "sae",
+      "key": "REDACTED",
+      "ifname": "phy1-mesh0"
+    }
+  }
+}

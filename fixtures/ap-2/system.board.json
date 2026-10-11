@@ -1,0 +1,11 @@
+{
+  "hostname": "device-18",
+  "model": "JioRouter AX6000 JIDU6401",
+  "board_name": "jio,jidu6401",
+  "release": {
+    "distribution": "OpenWrt",
+    "version": "25.12.5",
+    "revision": "r33051",
+    "description": "OpenWrt 25.12.5 r33051"
+  }
+}

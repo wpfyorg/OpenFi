@@ -1,0 +1,4 @@
+# Router target: OpenWrt 25.12 mediatek/filogic (aarch64, musl).
+# Build with:  cargo zigbuild --release --target aarch64-unknown-linux-musl
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]

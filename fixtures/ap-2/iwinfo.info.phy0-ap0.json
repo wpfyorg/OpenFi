@@ -1,0 +1,13 @@
+{
+  "phy": "phy0",
+  "ssid": "Example-WiFi-13",
+  "mode": "Master",
+  "channel": 6,
+  "frequency": 2437,
+  "htmode": "HE40",
+  "txpower": 20,
+  "txpower_offset": 0,
+  "noise": -92,
+  "bitrate": 574000,
+  "hardware_name": "MT7915"
+}

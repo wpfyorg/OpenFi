@@ -1,0 +1,19 @@
+{
+  "openwrtfi": {
+    "description": "Read-only ubus access for the OpenWrtFi controller's poll loop (install on APs as /usr/share/rpcd/acl.d/openwrtfi.json, for the dedicated read-only rpcd user in Config.nodes[].username). Write actions never use this user — see rpcd-acl-openwrtfi-admin.json, granted to the logged-in dashboard admin's own session instead.",
+    "read": {
+      "ubus": {
+        "system": ["info", "board"],
+        "network.device": ["status"],
+        "network.interface": ["dump"],
+        "iwinfo": ["info", "assoclist", "devices"],
+        "hostapd.*": ["get_clients", "get_status"],
+        "usteer": ["local_info", "get_clients", "remote_hosts"],
+        "luci.temp-status": ["getSensors"],
+        "luci-rpc": ["getHostHints", "getDHCPLeases"],
+        "uci": ["get"],
+        "file": ["read", "exec"]
+      }
+    }
+  }
+}

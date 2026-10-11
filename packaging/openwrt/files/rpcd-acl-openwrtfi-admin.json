@@ -1,0 +1,14 @@
+{
+  "openwrtfi-admin": {
+    "description": "Write ubus access for OpenWrtFi's action handlers, granted to the logged-in dashboard admin's own rpcd session (docs/api.md's Auth section: writes run under *that user's* session, never a service account). Install as /usr/share/rpcd/acl.d/openwrtfi-admin.json on every node (gateway and APs) and assign it to whichever user logs into the dashboard. The root LuCI user already has unrestricted rpcd access and doesn't need this; it matters for a dedicated non-root admin account.",
+    "write": {
+      "ubus": {
+        "hostapd.*": ["del_client"],
+        "uci": ["set", "add", "apply", "confirm", "revert"],
+        "system": ["reboot"],
+        "network.wireless": ["reload"],
+        "file": ["exec"]
+      }
+    }
+  }
+}

@@ -1,0 +1,3 @@
+{
+  "data": "IP address       HW type     Flags       HW address            Mask     Device\n192.0.2.49    0x1         0x2         02:00:00:00:00:03     *        br-lan\n"
+}

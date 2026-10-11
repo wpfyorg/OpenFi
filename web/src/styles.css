@@ -1,0 +1,543 @@
+/* Tokens mirror design/gen_design.py VARS / NODE / DEVICE / SECTION. Keep both in lock-step. */
+:root {
+  --bg: #0d1117; --sidebar: #10141a; --panel: #141920; --raised: #1b212a; --grid: #1e252e;
+  --border: #232b35; --border-strong: #3a4452; --track: #252d38;
+  --text: #e6eaf0; --text-2: #9aa4b2; --text-3: #6b7686;
+  --accent: #4e8bff; --accent-soft: #14253a;
+  /* Traffic direction: blue/amber reads for colour-blind users where red/green doesn't. */
+  --down: #4ea8ff; --up: #f2b14c;
+  --ok: #3dd68c; --red: #ff5c5c; --danger: #ff5c5c; --orange: #ff8a4c; --orange-soft: #2a1c14;
+  --yellow: #f2c14c; --warn: #ff8a4c;
+  /* Set per page root (see pages/*.tsx) to the active nav item's colour. */
+  --section: #4e8bff;
+  --r-container: 10px; --r-control: 6px; --r-chip: 5px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  /* The router serves no web fonts (may be offline) — Plex if the OS has it installed, else the system face. */
+  font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  font-size: 13px; line-height: 1.45;
+}
+.mono { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace; font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-2); }
+.small { font-size: 11px; }
+a { color: inherit; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--section); outline-offset: 2px; border-radius: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+
+/* ---------------------------------------------------------------- shell */
+.shell { display: flex; min-height: 100vh; }
+.shell-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+main { padding: 24px 32px 40px; flex: 1; min-width: 0; }
+.page { display: flex; flex-direction: column; gap: 14px; }
+.page-center { align-items: center; text-align: center; }
+
+.sidebar {
+  width: 220px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--border);
+  padding: 16px 12px; display: flex; flex-direction: column; gap: 20px;
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 2px 6px; }
+.brand-mark {
+  width: 30px; height: 30px; border-radius: 7px; background: #4e8bff; color: #fff;
+  display: flex; align-items: center; justify-content: center; font-family: "IBM Plex Mono", monospace;
+  font-weight: 700; font-size: 13px; flex-shrink: 0;
+}
+.brand-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.brand-name strong { font-size: 14px; font-weight: 700; }
+.brand-name span { font-size: 11px; color: var(--text-3); font-weight: 500; }
+
+.nav { display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 7px;
+  text-decoration: none; color: var(--text-2); font-weight: 500; font-size: 13px;
+}
+.nav-item.on { background: color-mix(in srgb, var(--section) 10%, transparent); color: var(--text); font-weight: 600; }
+.nav-item:hover:not(.on) { background: var(--raised); }
+
+.sidebar-spacer { flex: 1; }
+.node-list { display: flex; flex-direction: column; gap: 8px; padding: 12px 10px; border-radius: 8px; border: 1px solid var(--border); }
+.node-list-label { font-size: 11px; font-weight: 500; color: var(--text-3); }
+.node-list-row { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.node-list-sw { width: 3px; height: 12px; border-radius: 1px; flex-shrink: 0; }
+.node-list-fill { flex: 1; }
+.sidebar-collapse {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: none; border: none;
+  color: var(--text-2); font-size: 12px; cursor: pointer; border-radius: 7px;
+}
+.sidebar-collapse:hover { background: var(--raised); }
+
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); display: inline-block; flex-shrink: 0; }
+.dot.ok { background: var(--ok); }
+.dot.bad { background: var(--danger); }
+
+/* ---------------------------------------------------------------- topbar */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 10px 32px; border-bottom: 1px solid var(--border);
+}
+.search {
+  display: flex; align-items: center; gap: 8px; width: 400px; max-width: 100%; padding: 7px 10px;
+  border-radius: var(--r-control); border: 1px solid var(--border); flex: 1;
+}
+.search input {
+  border: none; background: none; color: var(--text); font: inherit; width: 100%; outline: none;
+}
+.search input::placeholder { color: var(--text-3); }
+.search kbd {
+  font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-3); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 6px; flex-shrink: 0;
+}
+.topbar-right { display: flex; align-items: center; gap: 20px; flex-shrink: 0; }
+.wan-status { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-2); }
+.user-menu { position: relative; }
+.user-btn {
+  display: flex; align-items: center; gap: 7px; background: none; border: none; cursor: pointer;
+  color: var(--text); font-size: 13px; font-weight: 500; padding: 4px;
+}
+.user-dropdown {
+  position: absolute; right: 0; top: calc(100% + 6px); background: var(--raised); border: 1px solid var(--border);
+  border-radius: var(--r-container); padding: 6px; display: flex; flex-direction: column; gap: 2px; min-width: 160px; z-index: 30;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.user-dropdown a, .user-dropdown button {
+  display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 6px; background: none; border: none;
+  color: var(--text); font-size: 12px; text-decoration: none; cursor: pointer; text-align: left;
+}
+.user-dropdown a:hover, .user-dropdown button:hover { background: var(--panel); }
+.icon-btn {
+  background: none; border: none; color: var(--text-2); cursor: pointer; display: flex; align-items: center;
+  justify-content: center; padding: 6px; border-radius: 6px;
+}
+.icon-btn:hover { background: var(--raised); color: var(--text); }
+.mobile-only { display: none; }
+
+/* ---------------------------------------------------------------- page header */
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.page-head-title { display: flex; align-items: center; gap: 14px; }
+.page-head-titles h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.2px; margin: 0; }
+.page-head-titles p { font-size: 13px; color: var(--text-2); margin: 4px 0 0; }
+.page-head-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* ---------------------------------------------------------------- tile */
+.tile { display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+/* ---------------------------------------------------------------- panel */
+.panel {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-container);
+  padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; flex: 1; min-width: 0;
+}
+.panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.panel-titles h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.panel-titles p { font-size: 12px; color: var(--text-3); margin: 3px 0 0; }
+
+.row { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.row-top > .panel:first-child { flex: 2 1 480px; }
+.row-top > .panel:last-child { flex: 1 1 320px; }
+.row-bottom > .panel { flex: 1 1 300px; }
+
+/* ---------------------------------------------------------------- stat band */
+.stat-band { display: flex; background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-container); overflow: hidden; flex-wrap: wrap; }
+.stat { flex: 1 1 200px; min-width: 180px; padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; border-left: 1px solid var(--border); }
+.stat:first-child { border-left: none; }
+.stat-head { display: flex; align-items: center; gap: 8px; }
+.stat-label { font-size: 11px; font-weight: 500; color: var(--text-2); }
+.stat-value { font-size: 24px; font-weight: 600; letter-spacing: -0.5px; }
+.stat-dot-value { display: inline-flex; align-items: center; gap: 8px; }
+.stat-dot-value .dot { width: 8px; height: 8px; }
+.stat-sub { font-size: 11px; color: var(--text-3); }
+
+/* ---------------------------------------------------------------- readout (Internet panel) */
+.readout { display: flex; gap: 40px; align-items: flex-end; flex-wrap: wrap; }
+.readout-cell { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.readout-cell:first-child, .readout-cell:nth-child(2) { align-items: flex-start; }
+.readout .label { font-size: 11px; font-weight: 500; color: var(--text-3); }
+.readout-value { display: flex; align-items: baseline; gap: 6px; }
+.readout-value .arrow { font-size: 22px; font-weight: 600; }
+.readout-value .mono { font-size: 32px; font-weight: 600; letter-spacing: -0.8px; }
+.readout-value small { font-size: 13px; color: var(--text-2); font-weight: 500; }
+.readout-value.down .arrow { color: var(--down); }
+.readout-value.up .arrow { color: var(--up); }
+.readout-since { gap: 4px; }
+.arrow.down { color: var(--down); }
+.arrow.up { color: var(--up); }
+
+.area-chart { width: 100%; }
+.overview { display: flex; flex-direction: column; gap: 8px; }
+.overview .label { font-size: 11px; color: var(--text-3); font-weight: 500; }
+.overview > svg { width: 100%; height: auto; display: block; }  /* the sparkline only, not empty-state icons */
+
+.legend { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); }
+.legend-item i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+/* ---------------------------------------------------------------- table */
+.table { width: 100%; border-collapse: collapse; }
+.table th { text-align: left; font-size: 11px; font-weight: 500; color: var(--text-3); padding: 8px 12px; background: var(--raised); }
+.table td { padding: 10px 12px; border-top: 1px solid var(--border); vertical-align: middle; }
+.updown { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; font-size: 11px; white-space: nowrap; }
+.updown span { display: flex; gap: 5px; align-items: center; }
+.share-cell { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }
+
+/* ---------------------------------------------------------------- share bar */
+.share-bar { display: inline-block; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; vertical-align: middle; }
+.share-bar i { display: block; height: 100%; border-radius: 2px; }
+
+/* ---------------------------------------------------------------- node tag */
+.node-tag { display: inline-flex; align-items: center; gap: 6px; }
+.node-tag-sw { width: 3px; border-radius: 1px; flex-shrink: 0; }
+
+/* ---------------------------------------------------------------- nodes panel */
+.node-rows { display: flex; flex-direction: column; }
+.node-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-top: 1px solid var(--border); }
+.node-row:first-child { border-top: none; }
+.node-row-who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.node-row-who > span:first-child, .node-tag { display: flex; align-items: center; gap: 8px; }
+.node-row-link { display: flex; align-items: center; gap: 6px; }
+.node-row-clients { width: 24px; text-align: right; flex-shrink: 0; }
+.node-row-temp { width: 40px; text-align: right; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-2); flex-shrink: 0; }
+.node-row-temp.hot { color: var(--orange); }
+.meter { width: 64px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; }
+.meter-head { display: flex; justify-content: space-between; align-items: center; }
+.meter .label { font-size: 11px; color: var(--text-3); font-weight: 500; }
+
+.callout {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; font-size: 12px;
+  color: var(--text-2); background: color-mix(in srgb, var(--section) 12%, transparent);
+}
+.callout.warn { background: var(--orange-soft); color: var(--text-2); }
+
+/* ---------------------------------------------------------------- qos / dns panels */
+.tier-list { display: flex; flex-direction: column; gap: 10px; }
+.tier-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+.dns-stats { display: flex; gap: 24px; flex-wrap: wrap; }
+.dns-stats > div { display: flex; flex-direction: column; gap: 4px; }
+.dns-stats .label { font-size: 11px; color: var(--text-3); font-weight: 500; }
+.mono.big { font-size: 18px; font-weight: 600; }
+.top-blocked { display: flex; flex-direction: column; gap: 6px; }
+.top-blocked-row { display: flex; justify-content: space-between; }
+
+/* ---------------------------------------------------------------- chip / segmented / button */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: var(--r-chip);
+  border: 1px solid var(--border); font-size: 11px; font-weight: 500; color: var(--text-2);
+}
+.chip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+
+.segmented { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--r-control); border: 1px solid var(--border); }
+.seg-opt { background: none; border: none; padding: 5px 10px; border-radius: 5px; font-size: 12px; font-weight: 500; color: var(--text-2); cursor: pointer; }
+.seg-opt.on { background: var(--raised); color: var(--text); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border-radius: var(--r-control);
+  border: 1px solid var(--border); background: none; color: var(--text); font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.btn:hover { background: var(--raised); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--section); border-color: var(--section); color: #fff; }
+.btn-primary:hover { filter: brightness(1.08); background: var(--section); }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* ---------------------------------------------------------------- toggle */
+.toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.toggle-track { width: 34px; height: 20px; border-radius: 999px; background: var(--track); position: relative; transition: background 0.15s; flex-shrink: 0; }
+.toggle-thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-2); transition: transform 0.15s, background 0.15s; }
+.toggle input:checked + .toggle-track { background: var(--section); }
+.toggle input:checked + .toggle-track .toggle-thumb { transform: translateX(14px); background: #fff; }
+.toggle input:focus-visible + .toggle-track { outline: 2px solid var(--section); outline-offset: 2px; }
+.toggle.disabled { opacity: 0.5; cursor: not-allowed; }
+.toggle-label { font-size: 12px; }
+
+/* ---------------------------------------------------------------- dialog */
+.dialog-backdrop {
+  position: fixed; inset: 0; background: rgba(6, 8, 11, 0.6); display: flex; align-items: center;
+  justify-content: center; z-index: 100; padding: 20px;
+}
+.dialog {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-container);
+  width: 420px; max-width: 100%; max-height: 90vh; overflow: auto; display: flex; flex-direction: column;
+}
+.dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+.dialog-head h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.dialog-body { padding: 18px; font-size: 13px; color: var(--text-2); }
+.dialog-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border); }
+
+/* ---------------------------------------------------------------- toast */
+.toast-stack { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 200; }
+.toast { background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-control); padding: 10px 14px; font-size: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
+.toast-error { border-color: var(--danger); }
+.toast-success { border-color: var(--ok); }
+
+/* ---------------------------------------------------------------- empty / loading / error states */
+.state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 32px 16px; text-align: center; color: var(--text-2); width: 100%; }
+.state-title { font-size: 13px; font-weight: 500; margin: 0; color: var(--text); }
+.state-hint { font-size: 12px; margin: 0; color: var(--text-3); }
+.state-page { padding: 64px 16px; gap: 12px; }
+.state-error .state-title { color: var(--danger); }
+.spinner {
+  width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--section);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-top-color: var(--border-strong); } }
+
+/* ---------------------------------------------------------------- bar chart */
+.bar-chart { display: flex; align-items: flex-end; justify-content: center; gap: 6px; }
+/* capped so a handful of days doesn't turn into a few wall-wide blocks */
+.bar-slot { flex: 1; max-width: 48px; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; min-width: 0; }
+.bar-stack, .bar-group { flex: 1; width: 100%; display: flex; }
+.bar-stack { flex-direction: column-reverse; }
+.bar-group { flex-direction: row; align-items: flex-end; gap: 2px; }
+.bar-seg { display: block; border-radius: 2px; min-height: 1px; }
+/* segment height is set inline from its value; stacked segments must not flex-grow over it */
+.bar-stack .bar-seg { flex: none; width: 100%; }
+.bar-group .bar-seg { flex: 1; }
+.bar-label { font-size: 10px; color: var(--text-3); }
+
+/* ---------------------------------------------------------------- table scroll wrapper (narrow viewports) */
+/* min-width: 0 lets this shrink below the table's min-content width inside a flex column — without it,
+   a panel squeezed next to a sibling (e.g. two side-by-side panels stacking on narrow viewports) is
+   forced wide by the table instead of scrolling it. Safe/backward-compatible for every existing user. */
+.table-scroll { width: 100%; min-width: 0; overflow-x: auto; }
+
+/* ---------------------------------------------------------------- table extras (sort / clickable rows) */
+.sort-arrow { color: var(--section); }
+.row-click { cursor: pointer; }
+.row-click:hover { background: var(--raised); }
+.row-click:focus-visible { outline: 2px solid var(--section); outline-offset: -2px; }
+
+/* ---------------------------------------------------------------- stat cell extras (multi-value KPIs) */
+.stat-split { display: flex; align-items: flex-end; gap: 14px; }
+.stat-split-cell { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.stat-split-cell .n { font-family: "IBM Plex Mono", monospace; font-size: 18px; font-weight: 600; }
+.stat-split-cell .l { font-size: 11px; color: var(--text-3); }
+.stat-mix-bar { display: flex; height: 5px; border-radius: 3px; overflow: hidden; background: var(--track); width: 100%; }
+.stat-mix-bar span { display: block; height: 100%; }
+
+/* ---------------------------------------------------------------- filters bar (Devices) */
+.filters-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.filters-bar .search { width: 260px; }
+.toggle-btn {
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border-radius: var(--r-control);
+  border: 1px solid var(--border); background: none; color: var(--text-2); font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.toggle-btn.on { color: var(--text); background: color-mix(in srgb, var(--section) 14%, transparent); border-color: var(--section); }
+.toggle-btn:hover { background: var(--raised); }
+
+/* ---------------------------------------------------------------- mesh backhaul / radio rows */
+.mesh-links { display: flex; flex-wrap: wrap; gap: 0; }
+.mesh-link { flex: 1 1 280px; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
+.mesh-link-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.mesh-link-pair { display: flex; align-items: center; gap: 6px; }
+.mesh-link-pair .to { color: var(--text-3); font-size: 11px; }
+.mesh-link-stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-2); }
+
+/* ---------------------------------------------------------------- drawer (Dialog used as a detail panel) */
+.drawer-section { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.drawer-section:last-child { margin-bottom: 0; }
+.drawer-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; padding: 6px 0; border-top: 1px solid var(--border); }
+.drawer-row:first-child { border-top: none; }
+.drawer-actions { display: flex; flex-direction: column; gap: 8px; }
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.field label { font-size: 11px; color: var(--text-3); font-weight: 500; }
+.field input, .field select {
+  font: inherit; background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-control);
+  color: var(--text); padding: 7px 9px;
+}
+
+/* ---------------------------------------------------------------- progress meter (fair-use) */
+.fup-bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; width: 100%; }
+.fup-bar > span { display: block; height: 100%; border-radius: 3px; }
+.fup-row { display: flex; flex-direction: column; gap: 5px; padding: 10px 0; border-top: 1px solid var(--border); }
+.fup-row:first-child { border-top: none; }
+.fup-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12px; }
+
+/* ---------------------------------------------------------------- app / talker share lists */
+.share-list { display: flex; flex-direction: column; gap: 10px; }
+.share-list-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.share-list-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- responsive */
+@media (max-width: 900px) {
+  .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; transform: translateX(-100%); transition: transform 0.18s ease; }
+  .sidebar.open { transform: translateX(0); box-shadow: 20px 0 40px rgba(0, 0, 0, 0.4); }
+  .sidebar-backdrop { position: fixed; inset: 0; background: rgba(6, 8, 11, 0.5); z-index: 40; }
+  .mobile-only { display: flex; }
+  .search { order: 3; flex: 1 1 100%; width: 100%; margin-top: 8px; }
+  .topbar { flex-wrap: wrap; }
+  main { padding: 18px 16px 32px; }
+  .readout { gap: 20px; }
+}
+@media (max-width: 480px) {
+  .stat { flex: 1 1 100%; border-left: none; border-top: 1px solid var(--border); }
+  .stat:first-child { border-top: none; }
+  .row-top > .panel, .row-bottom > .panel { flex: 1 1 100%; }
+  .node-row { flex-wrap: wrap; }
+  .filters-bar .search { width: 100%; }
+  .mesh-link { flex: 1 1 100%; }
+}
+
+/* ================================================================== Topology / SettingsWifi / Login / Logs
+   (pages/Topology.tsx, pages/SettingsWifi.tsx, pages/Login.tsx, pages/Logs.tsx, and their components) */
+
+/* ---------------------------------------------------------------- generic form bits shared by these pages */
+.text-input {
+  font: inherit; background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-control);
+  color: var(--text); padding: 7px 9px;
+}
+.text-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.field-error { color: var(--danger); font-size: 12px; margin: 4px 0 0; }
+.btn-tiny { padding: 3px 8px; font-size: 11px; }
+.chip-ok { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); }
+.chip-bad { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); color: var(--danger); }
+.dot.warn { background: var(--warn); }
+.spin { animation: spin 0.8s linear infinite; }
+.hidden { display: none; }
+.row-select-btn {
+  display: flex; flex-direction: column; gap: 3px; align-items: flex-start; background: none; border: none;
+  color: inherit; font: inherit; padding: 0; cursor: pointer; width: 100%; text-align: left;
+}
+
+/* ---------------------------------------------------------------- topology graph */
+.topo-row { align-items: stretch; }
+.panel-topo { flex: 2 1 560px; min-height: 520px; }
+.topo-wrap { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
+.topo-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.topo-zoom-controls { display: flex; gap: 2px; border: 1px solid var(--border); border-radius: var(--r-control); padding: 2px; }
+.topo-svg { width: 100%; height: 420px; touch-action: none; cursor: grab; }
+.topo-svg:active { cursor: grabbing; }
+.topo-link-label {
+  display: flex; align-items: center; justify-content: center; height: 100%; margin: 0 auto; width: fit-content;
+  max-width: 100%; padding: 2px 7px; border-radius: var(--r-chip); border: 1px solid; background: var(--panel);
+  font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.topo-node-btn { background: none; border: none; padding: 0; margin: 0; cursor: pointer; width: 100%; height: 100%; font: inherit; color: inherit; }
+.topo-node {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 100%; padding: 0 10px; box-sizing: border-box;
+  background: var(--raised); border: 1.5px solid var(--border); border-radius: var(--r-container);
+}
+.topo-node.selected { border-color: var(--node-color, var(--section)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--node-color, var(--section)) 30%, transparent); }
+.topo-node.dim { opacity: 0.55; }
+.topo-node-btn:focus-visible .topo-node { outline: 2px solid var(--section); outline-offset: 1px; }
+.topo-node-tile { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.topo-node-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; text-align: left; }
+.topo-node-name { font-size: 12px; font-weight: 600; }
+.topo-node-sub { font-size: 10px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topo-node-clients { flex-shrink: 0; }
+
+/* ---------------------------------------------------------------- node card (Topology side panel) */
+.node-card { flex: 1 1 320px; max-width: 360px; gap: 14px; }
+.node-card-head { display: flex; align-items: center; gap: 12px; }
+.node-card-tile { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.node-card-titles h2 { font-size: 15px; margin: 0; }
+.node-card-titles p { font-size: 11px; color: var(--text-3); margin: 2px 0 0; }
+.node-card-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.node-card-facts { display: flex; flex-direction: column; gap: 6px; margin: 0; }
+.node-card-facts > div { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+.node-card-facts dt { color: var(--text-3); font-weight: 500; }
+.node-card-facts dd { margin: 0; }
+.node-card-meters { display: flex; flex-direction: column; gap: 10px; }
+.node-card-meter { display: flex; flex-direction: column; gap: 4px; }
+.node-card-section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+.node-card-section h3 { font-size: 11px; font-weight: 600; color: var(--text-3); margin: 0; display: flex; justify-content: space-between; text-transform: uppercase; letter-spacing: 0.03em; }
+.hot-flag { color: var(--orange); text-transform: none; letter-spacing: 0; font-weight: 500; }
+.temp-row, .link-row, .radio-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.temp-row .label { flex: 1; }
+.mono.small.hot { color: var(--orange); }
+.link-row { justify-content: space-between; }
+.radio-row-clients { margin-left: auto; }
+.node-card-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+.node-card-actions .btn { flex: 1 1 auto; justify-content: center; }
+
+/* ---------------------------------------------------------------- apply plan (SettingsWifi review + apply) */
+.apply-plan { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
+.diff-block {
+  background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-control); padding: 10px 12px;
+  font-size: 11px; overflow-x: auto; white-space: pre; color: var(--ok);
+}
+.apply-plan-timeline { display: flex; flex-direction: column; gap: 6px; }
+.plan-step-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 0; border-top: 1px solid var(--border); }
+.plan-step-row:first-of-type { border-top: none; }
+.plan-step-error { margin-left: auto; }
+
+/* ---------------------------------------------------------------- diagnostics panel (Logs) */
+.diag-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.diag-node-select { min-width: 140px; }
+.diag-host-input { flex: 1 1 220px; }
+.diag-exit { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.diag-output {
+  background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-control); padding: 10px 12px;
+  font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow-y: auto;
+}
+
+/* ---------------------------------------------------------------- shell drawer */
+.dialog.dialog-wide { width: 720px; }
+.shell-password-form { display: flex; flex-direction: column; gap: 10px; }
+.shell-error { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 12px 0; }
+.shell-body { display: flex; flex-direction: column; gap: 0; margin: -18px; }
+.shell-body.hidden { display: none; }
+.shell-banner {
+  display: flex; align-items: center; gap: 8px; padding: 8px 18px; background: color-mix(in srgb, var(--danger) 18%, var(--panel));
+  color: #fff; font-size: 12px;
+}
+.shell-timers { margin-left: auto; opacity: 0.85; }
+.shell-terminal { padding: 10px; background: #0d1117; min-height: 360px; }
+
+/* ---------------------------------------------------------------- logs page */
+.logs-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.logs-text-filter { flex: 1 1 200px; }
+.logs-autorefresh { margin-left: auto; gap: 8px; }
+.log-msg { word-break: break-word; }
+
+/* ---------------------------------------------------------------- login page */
+.login-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.login-page { width: 100%; max-width: 380px; }
+.login-form { width: 100%; align-items: stretch; }
+.login-hint { text-align: center; margin: 0; }
+
+/* ---------------------------------------------------------------- wifi settings page */
+.wifi-settings-row { align-items: stretch; }
+.wifi-settings-row > .panel:first-child { flex: 2 1 460px; }
+.panel-wifi-editor { flex: 1 1 380px; max-width: 460px; }
+.wifi-net-title { display: flex; align-items: center; gap: 6px; }
+.wifi-secband { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.wifi-bc-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.node-tag.dim { opacity: 0.55; }
+.wifi-clients-roam { display: flex; flex-direction: column; gap: 2px; align-items: flex-end; }
+.wifi-section { border-top: 1px solid var(--border); padding: 12px 0; }
+.wifi-section:first-of-type { border-top: none; padding-top: 0; }
+.wifi-section summary { font-size: 13px; font-weight: 600; cursor: pointer; padding: 2px 0; list-style: revert; }
+.wifi-section summary::marker { color: var(--text-3); }
+.wifi-section[open] summary { margin-bottom: 10px; }
+.password-field { display: flex; align-items: center; gap: 4px; }
+.password-field input { flex: 1; }
+.review-apply { display: flex; flex-direction: column; gap: 10px; }
+.review-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.broadcast-matrix { display: flex; flex-direction: column; gap: 8px; }
+.bc-row { display: grid; grid-template-columns: 1fr 80px 80px; align-items: center; gap: 8px; padding: 4px 0; }
+.bc-head { font-size: 11px; color: var(--text-3); font-weight: 500; }
+.roaming-fields { display: flex; flex-direction: column; gap: 14px; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
+.switch-title { display: block; font-size: 12px; font-weight: 500; }
+
+@media (max-width: 900px) {
+  .node-card { max-width: 100%; }
+  .panel-wifi-editor { max-width: 100%; }
+  .dialog.dialog-wide { width: 100%; }
+  .shell-terminal { min-height: 240px; }
+}
+@media (max-width: 480px) {
+  .topo-row, .wifi-settings-row { flex-direction: column; }
+  .topo-row > .panel:first-child, .topo-row > .panel:last-child,
+  .wifi-settings-row > .panel:first-child, .wifi-settings-row > .panel:last-child { flex-basis: auto; min-width: 0; width: 100%; }
+  .bc-row { grid-template-columns: 1fr 60px 60px; }
+  .logs-autorefresh { margin-left: 0; }
+}

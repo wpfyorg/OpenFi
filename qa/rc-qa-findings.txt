@@ -1,0 +1,12 @@
+FIX-001 audit persistence race
+FIX-002 traffic active bucket restart duplication
+FIX-003 current-day usage persistence
+FIX-004 >50-client aggregate undercount
+FIX-005 whitelist source precedence
+FIX-006 local-day UTC boundary
+FIX-007 Axum JSON rejection normalization
+FIX-008 node config lost update
+FIX-009 one-sided WAN counter reset
+FIX-010 QoS-only client last_seen
+FIX-011 API daily usage docs
+VERIFY-001 rpcd file-read compatibility

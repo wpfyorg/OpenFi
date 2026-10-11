@@ -1,0 +1,59 @@
+{
+  "time_units": "hours",
+  "num_dns_queries": 48213,
+  "num_blocked_filtering": 6104,
+  "num_replaced_safebrowsing": 3,
+  "num_replaced_parental": 0,
+  "avg_processing_time": 0.0037,
+  "top_blocked_domains": [
+    {
+      "doubleclick.net": 812
+    },
+    {
+      "graph.facebook.com": 640
+    },
+    {
+      "ads.samsung.com": 511
+    },
+    {
+      "telemetry.roku.com": 388
+    },
+    {
+      "analytics.tiktok.com": 240
+    }
+  ],
+  "top_queried_domains": [
+    {
+      "www.google.com": 3120
+    },
+    {
+      "api.openai.com": 2044
+    }
+  ],
+  "dns_queries": [
+    812,
+    790,
+    650,
+    610,
+    590,
+    640,
+    900,
+    1250,
+    1830,
+    2100,
+    2260,
+    2340,
+    2410,
+    2380,
+    2290,
+    2200,
+    2350,
+    2500,
+    2680,
+    2410,
+    1980,
+    1540,
+    1120,
+    940
+  ]
+}
