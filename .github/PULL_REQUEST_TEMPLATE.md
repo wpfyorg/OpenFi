@@ -20,6 +20,7 @@
 
 ## Safety and compatibility
 
+- [ ] I understand and reviewed the changes I submit, and can explain their behavior and tradeoffs, regardless of the tools used
 - [ ] No credentials, tokens, session cookies, or identifying device/network data included
 - [ ] API or configuration contract updates are documented, if applicable
 - [ ] Related issue linked, if applicable
