@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@xterm/xterm": "^6.0.0",
-    "lucide-preact": "^1.48.0",
+    "lucide-preact": "^1.53.0",
     "preact": "^10.27.0",
     "uplot": "^1.6.32"
   },
