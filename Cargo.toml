@@ -21,7 +21,7 @@ futures-util = { version = "0.3", default-features = false }
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 # Already pulled in transitively by axum's "ws" feature (server-side upgrade); declared directly
 # too so `src/shell.rs` can use it as a WebSocket *client* to proxy to ttyd. No TLS features.
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 
 [dev-dependencies]
 # Already in the dependency graph via axum itself; used here only to drive the router directly
