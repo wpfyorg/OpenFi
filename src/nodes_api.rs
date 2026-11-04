@@ -50,6 +50,10 @@ fn err(code: StatusCode, message: impl Into<String>) -> Response {
     (code, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn mutation_err(code: StatusCode, message: impl Into<String>) -> Box<Response> {
+    Box::new(err(code, message))
+}
+
 fn view(
     name: &str,
     host: &str,
@@ -142,7 +146,7 @@ pub async fn add(State(state): State<Arc<AppState>>, Json(body): Json<AddNodeReq
 
     let update = mutate_config(&state.config_path, |doc| {
         let Some(nodes) = doc.get_mut("nodes").and_then(Value::as_array_mut) else {
-            return Err(err(
+            return Err(mutation_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "config has no nodes array",
             ));
@@ -151,7 +155,7 @@ pub async fn add(State(state): State<Arc<AppState>>, Json(body): Json<AddNodeReq
             .iter()
             .any(|n| n.get("name").and_then(Value::as_str) == Some(name.as_str()))
         {
-            return Err(err(
+            return Err(mutation_err(
                 StatusCode::CONFLICT,
                 format!("a node named {name:?} already exists"),
             ));
@@ -160,7 +164,7 @@ pub async fn add(State(state): State<Arc<AppState>>, Json(body): Json<AddNodeReq
             .iter()
             .any(|n| n.get("host").and_then(Value::as_str) == Some(host.as_str()))
         {
-            return Err(err(
+            return Err(mutation_err(
                 StatusCode::CONFLICT,
                 format!("a node at {host} already exists"),
             ));
@@ -170,7 +174,7 @@ pub async fn add(State(state): State<Arc<AppState>>, Json(body): Json<AddNodeReq
     })
     .await;
     if let Err(response) = update {
-        return response;
+        return *response;
     }
     schedule_restart();
 
@@ -206,7 +210,7 @@ pub async fn remove(State(state): State<Arc<AppState>>, Path(node_name): Path<St
 
     let update = mutate_config(&state.config_path, |doc| {
         let Some(nodes) = doc.get_mut("nodes").and_then(Value::as_array_mut) else {
-            return Err(err(
+            return Err(mutation_err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "config has no nodes array",
             ));
@@ -214,7 +218,7 @@ pub async fn remove(State(state): State<Arc<AppState>>, Path(node_name): Path<St
         let before = nodes.len();
         nodes.retain(|n| n.get("name").and_then(Value::as_str) != Some(node_name.as_str()));
         if nodes.len() == before {
-            return Err(err(
+            return Err(mutation_err(
                 StatusCode::NOT_FOUND,
                 format!("unknown node {node_name:?}"),
             ));
@@ -223,7 +227,7 @@ pub async fn remove(State(state): State<Arc<AppState>>, Path(node_name): Path<St
     })
     .await;
     if let Err(response) = update {
-        return response;
+        return *response;
     }
     schedule_restart();
     Json(json!({ "removed": node_name })).into_response()
@@ -245,16 +249,16 @@ async fn read_config(path: &FsPath) -> Result<Value, String> {
 
 async fn mutate_config<T>(
     path: &FsPath,
-    update: impl FnOnce(&mut Value) -> Result<T, Response>,
-) -> Result<T, Response> {
+    update: impl FnOnce(&mut Value) -> Result<T, Box<Response>>,
+) -> Result<T, Box<Response>> {
     let _mutation_guard = CONFIG_MUTATION_LOCK.lock().await;
     let mut doc = read_config(path)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| mutation_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let result = update(&mut doc)?;
     write_config(path, &doc)
         .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| mutation_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(result)
 }
 
@@ -300,7 +304,7 @@ mod tests {
     async fn concurrent_edit(
         path: std::path::PathBuf,
         start: Arc<tokio::sync::Barrier>,
-        edit: impl FnOnce(&mut Value) -> Result<(), Response> + Send + 'static,
+        edit: impl FnOnce(&mut Value) -> Result<(), Box<Response>> + Send + 'static,
     ) {
         start.wait().await;
         mutate_config(&path, edit).await.unwrap();

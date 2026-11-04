@@ -21,6 +21,7 @@ mod shell;
 #[cfg(test)]
 mod test_support;
 mod ubus;
+mod uci_engine;
 mod validate;
 mod web;
 
