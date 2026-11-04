@@ -169,7 +169,15 @@ export type LogLevel = "info" | "warn" | "err";
 export interface LogLine { ts: number; node: string; level: LogLevel; source: string; msg: string }
 
 export type AuditResult = "ok" | "error";
-export interface AuditEntry { ts: number; user: string; action: string; target: string; result: AuditResult; detail: string | null }
+export interface ConfigChange {
+  node: string; config: string; section: string; option: string;
+  before: string | null; after: string | null; restorable: boolean;
+  restore_section: boolean;
+}
+export interface AuditEntry {
+  id: string; ts: number; user: string; action: string; target: string;
+  result: AuditResult; detail: string | null; config_changes?: ConfigChange[];
+}
 
 // ---- diagnostics ----
 

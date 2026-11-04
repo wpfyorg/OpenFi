@@ -27,7 +27,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     AppState,
-    audit::{self, AuditEntry, AuditResult},
+    audit::{self, AuditEntry, AuditResult, ConfigChange},
     config::NodeConfig,
     model::{Plan, PlanDiff, PlanRunState, PlanStatus, StepState, StepStatus},
     safe_apply,
@@ -124,6 +124,47 @@ struct NodeChange {
     node: String,
     section: String,
     values: BTreeMap<String, UciValue>,
+    before: BTreeMap<String, Option<serde_json::Value>>,
+}
+
+fn audit_changes(changes: &[NodeChange]) -> Vec<ConfigChange> {
+    changes
+        .iter()
+        .flat_map(|c| {
+            c.values.iter().map(|(option, after)| {
+                let before = c.before.get(option).cloned().flatten();
+                let secret = matches!(
+                    option.as_str(),
+                    "key" | "password" | "psk" | "private_key" | "auth_token"
+                );
+                let show = |v: Option<serde_json::Value>| {
+                    v.map(|v| {
+                        if secret {
+                            audit::mask_secret("").to_owned()
+                        } else if let Some(s) = v.as_str() {
+                            s.to_owned()
+                        } else {
+                            v.to_string()
+                        }
+                    })
+                };
+                ConfigChange {
+                    node: c.node.clone(),
+                    config: "wireless".into(),
+                    section: c.section.clone(),
+                    option: option.clone(),
+                    before: show(before.clone()),
+                    after: show(Some(after.to_wire())),
+                    restorable: !secret
+                        && before
+                            .as_ref()
+                            .is_none_or(|v| !v.is_array() && !v.is_object())
+                        && !matches!(after, UciValue::List(_)),
+                    restore_section: false,
+                }
+            })
+        })
+        .collect()
 }
 
 /// Locates every wifi-iface section (across every node) belonging to the network named by
@@ -272,10 +313,23 @@ fn build_changes(
     by_node_section
         .into_iter()
         .filter(|(_, v)| !v.is_empty())
-        .map(|((node, section), values)| NodeChange {
-            node,
-            section,
-            values,
+        .map(|((node, section), values)| {
+            let before = per_node_sections
+                .get(&node)
+                .and_then(|sections| sections.iter().find(|s| s.name == section))
+                .map(|old| {
+                    values
+                        .keys()
+                        .map(|key| (key.clone(), old.options.get(key).cloned()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            NodeChange {
+                node,
+                section,
+                values,
+                before,
+            }
         })
         .collect()
 }
@@ -388,10 +442,12 @@ async fn record_audit(
     node: &str,
     ok: bool,
     detail: &str,
+    config_changes: Vec<ConfigChange>,
 ) {
     state
         .audit
         .record(AuditEntry {
+            id: String::new(),
             ts: now(),
             user: user.to_owned(),
             action: action.to_owned(),
@@ -402,6 +458,7 @@ async fn record_audit(
                 AuditResult::Error
             },
             detail: detail.to_owned(),
+            config_changes,
         })
         .await;
 }
@@ -439,16 +496,6 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
             None,
         )
         .await;
-        record_audit(
-            &state,
-            &user,
-            "plan_apply_start",
-            &step.node,
-            true,
-            "applying",
-        )
-        .await;
-
         // `Failed`: the change itself couldn't even be attempted/applied (bad uci call, rpcd
         // error). `RolledBack`: the change *was* applied but the node went unreachable before
         // it could be confirmed, so rpcd's own timer reverted it — a distinct, expected outcome
@@ -554,6 +601,7 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
                     &step.node,
                     true,
                     "confirmed",
+                    audit_changes(&step.changes),
                 )
                 .await;
                 confirmed_real.push(step.clone());
@@ -565,7 +613,16 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
                     "plan_apply_failed"
                 };
                 set_status(&record, &step.node, status, None, Some(e.clone())).await;
-                record_audit(&state, &user, action, &step.node, false, &e).await;
+                record_audit(
+                    &state,
+                    &user,
+                    action,
+                    &step.node,
+                    false,
+                    &e,
+                    audit_changes(&step.changes),
+                )
+                .await;
                 failed = true;
             }
         }
@@ -868,6 +925,7 @@ mod tests {
         let changes = vec![NodeChange {
             node: "ap-2".into(),
             section: "default_radio1".into(),
+            before: BTreeMap::new(),
             values: {
                 let mut m = BTreeMap::new();
                 m.insert("ssid".into(), UciValue::String("NewWifi".into()));
@@ -883,6 +941,35 @@ mod tests {
                 .iter()
                 .any(|l| l.contains('\u{2022}') && !l.contains("supersecret"))
         );
+    }
+
+    #[test]
+    fn history_masks_secrets_and_marks_only_scalar_public_values_restorable() {
+        let changes = vec![NodeChange {
+            node: "ap-2".into(),
+            section: "wifi_main".into(),
+            before: BTreeMap::from([
+                ("ssid".into(), Some(serde_json::Value::String("Old".into()))),
+                (
+                    "key".into(),
+                    Some(serde_json::Value::String("old-secret".into())),
+                ),
+            ]),
+            values: BTreeMap::from([
+                ("ssid".into(), UciValue::String("New".into())),
+                ("key".into(), UciValue::String("new-secret".into())),
+            ]),
+        }];
+        let rows = audit_changes(&changes);
+        let ssid = rows.iter().find(|r| r.option == "ssid").unwrap();
+        assert_eq!(ssid.before.as_deref(), Some("Old"));
+        assert_eq!(ssid.after.as_deref(), Some("New"));
+        assert!(ssid.restorable);
+        let key = rows.iter().find(|r| r.option == "key").unwrap();
+        assert_eq!(key.before.as_deref(), Some("••••••••"));
+        assert_eq!(key.after.as_deref(), Some("••••••••"));
+        assert!(!key.restorable);
+        assert!(!serde_json::to_string(&rows).unwrap().contains("secret"));
     }
 
     #[test]

@@ -19,7 +19,7 @@ use serde_json::json;
 use tokio_stream::wrappers::WatchStream;
 
 use crate::{
-    AppState, actions, auth, capabilities, collectors,
+    AppState, actions, auth, capabilities, collectors, config_history,
     diag::{self, DiagRequest},
     model::RatePoint,
     nodes_api, plan, session, shell, web,
@@ -40,6 +40,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/wifi/networks", get(wifi_networks))
         .route("/api/v1/logs", get(logs))
         .route("/api/v1/audit", get(audit))
+        .route("/api/v1/config-history", get(config_history::list))
+        .route(
+            "/api/v1/config-history/{id}/restore",
+            post(config_history::restore),
+        )
         .route("/api/v1/diag", post(diag_handler))
         // Persistent controller node configuration
         .route("/api/v1/nodes", get(nodes_api::list).post(nodes_api::add))

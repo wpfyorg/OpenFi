@@ -1,4 +1,4 @@
-//! In-memory audit log, and its on-disk mirror (`/tmp/openwrtfi-audit.log`, JSON lines, capped
+//! In-memory audit log, and its on-disk mirror (`/etc/openwrtfi/audit.jsonl`, JSON lines, capped
 //! at 1000). Every action handler (`src/actions.rs`, `src/plan.rs`, `src/shell.rs`) calls
 //! `record()` exactly once per write — success or failure — and never with a raw secret in
 //! `detail` (see `mask_secret`/`mask_uci_line`).
@@ -15,12 +15,34 @@ const MAX_LOG_LINES: usize = 1000;
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct AuditEntry {
+    #[serde(default)]
+    pub id: String,
     pub ts: u64,
     pub user: String,
     pub action: String,
     pub target: String,
     pub result: AuditResult,
     pub detail: String,
+    /// Structured, secret-masked UCI changes. Older audit rows omit this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_changes: Vec<ConfigChange>,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct ConfigChange {
+    pub node: String,
+    pub config: String,
+    pub section: String,
+    pub option: String,
+    /// Values are display-safe; secret options are always replaced with bullets.
+    pub before: Option<String>,
+    pub after: Option<String>,
+    /// Restoration is supported only when both values are scalar and the option is not secret.
+    #[serde(default)]
+    pub restorable: bool,
+    /// This change created the whole section; restore removes it only after exact section match.
+    #[serde(default)]
+    pub restore_section: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -34,11 +56,12 @@ pub struct Audit {
     entries: Mutex<VecDeque<AuditEntry>>,
     disk_write: Mutex<()>,
     log_path: std::path::PathBuf,
+    next_id: std::sync::atomic::AtomicU64,
 }
 
 impl Default for Audit {
     fn default() -> Self {
-        Self::new("/tmp/openwrtfi-audit.log".into())
+        Self::new("/etc/openwrtfi/audit.jsonl".into())
     }
 }
 
@@ -48,10 +71,21 @@ impl Audit {
             entries: Mutex::new(load_entries(&log_path)),
             disk_write: Mutex::new(()),
             log_path,
+            next_id: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
-    pub async fn record(&self, entry: AuditEntry) {
+    pub async fn record(&self, mut entry: AuditEntry) {
+        if entry.id.is_empty() {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default();
+            let seq = self
+                .next_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            entry.id = format!("{nanos:x}-{seq:x}");
+        }
         {
             let mut entries = self.entries.lock().await;
             entries.push_front(entry.clone());
@@ -73,6 +107,9 @@ impl Audit {
         let Ok(line) = serde_json::to_string(entry) else {
             return;
         };
+        if let Some(parent) = self.log_path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
         let existing = tokio::fs::read_to_string(&self.log_path)
             .await
             .unwrap_or_default();
@@ -139,12 +176,14 @@ mod tests {
 
     fn entry(ts: u64) -> AuditEntry {
         AuditEntry {
+            id: String::new(),
             ts,
             user: "root".into(),
             action: "kick".into(),
             target: "aa:bb".into(),
             result: AuditResult::Ok,
             detail: String::new(),
+            config_changes: vec![],
         }
     }
 
