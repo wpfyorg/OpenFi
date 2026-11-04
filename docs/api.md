@@ -53,6 +53,13 @@ interface Node {
   radios: Radio[];
   links: Link[];              // mesh peers + wired uplink
 }
+interface NodeCapabilities {
+  packages: string[];         // APK installed database, then legacy opkg status; empty if unavailable
+  ubus_objects: { name: string; methods: string[] }[];
+  protocols: string[];        // protocols recognized from installed packages
+  services: string[];         // names returned by service.list
+  actions: string[];          // positively discovered UI action identifiers
+}
 interface Temp { label: string; celsius: number; crit: number | null }
 interface Radio {
   name: string;               // uci section, e.g. "radio0"
@@ -135,6 +142,7 @@ interface Health { status: "ok" | "degraded" | "down"; reasons: string[] }
 | `GET /history?range=24h\|7d` | `RatePoint[]` (24h: 30-min buckets; 7d: 3-h buckets, from RAM ring + `/tmp/openwrtfi-history.json`) |
 | `GET /usage/daily?days=30` | `{ day: "YYYY-MM-DD", rx_bytes, tx_bytes, devices }[]` from OpenWrtFi's WAN-counter rollup |
 | `GET /wifi/networks` | `WifiNetwork[]` (see below) |
+| `GET /nodes/{node}/capabilities` | `NodeCapabilities`; failed probes omit capabilities |
 | `GET /logs?node=<name>&lines=200` | `{ ts, node, level: "info"\|"warn"\|"err", source, msg }[]` from `logread` |
 | `GET /audit` | `{ ts, user, action, target, result: "ok"\|"error", detail }[]` newest first |
 
@@ -188,6 +196,14 @@ rpcd sessions and existing ACLs. Sessions expire after 30 min idle.
 | `POST /nodes/{node}/reboot` | | `system reboot` |
 | `POST /nodes/{node}/wifi/reload` | | `network.wireless` reload |
 | `POST /nodes/{node}/radios/{radio}` | `{ disabled?: boolean, channel?: number \| "auto", txpower_dbm?: number }` | `uci set wireless.<radio>.*` → apply with rollback → confirm |
+
+The topology node panel requests capabilities for its selected node. Wi-Fi reload, radio
+configuration, reboot, and shell controls appear only when that node reports the matching
+action (`wifi.reload`, `radio.configure`, `node.reboot`, `shell.open`). An unavailable or
+malformed probe yields no corresponding action. The protocol list recognizes protocols by
+their installed OpenWrt package names. Package discovery reads `/lib/apk/db/installed` first and
+falls back to `/usr/lib/opkg/status`; if neither yields a valid installed package set, packages
+and derived protocols are empty.
 
 ### Multi-node WiFi change (the "apply plan")
 

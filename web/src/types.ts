@@ -53,6 +53,14 @@ export interface Node {
   links: Link[];
 }
 
+export interface NodeCapabilities {
+  packages: string[];
+  ubus_objects: { name: string; methods: string[] }[];
+  protocols: string[];
+  services: string[];
+  actions: string[];
+}
+
 export interface Client {
   mac: string; ip: string | null; hostname: string | null;
   online: boolean;

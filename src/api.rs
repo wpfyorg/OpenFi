@@ -3,7 +3,7 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{Request, StatusCode, Uri, header},
     middleware,
     middleware::Next,
@@ -19,7 +19,7 @@ use serde_json::json;
 use tokio_stream::wrappers::WatchStream;
 
 use crate::{
-    AppState, actions, auth, collectors,
+    AppState, actions, auth, capabilities, collectors,
     diag::{self, DiagRequest},
     model::RatePoint,
     nodes_api, plan, session, shell, web,
@@ -43,6 +43,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/diag", post(diag_handler))
         // Persistent controller node configuration
         .route("/api/v1/nodes", get(nodes_api::list).post(nodes_api::add))
+        .route("/api/v1/nodes/{node}/capabilities", get(node_capabilities))
         .route("/api/v1/nodes/{node}/remove", post(nodes_api::remove))
         // Auth
         .route("/api/v1/auth/login", post(auth::login))
@@ -204,6 +205,18 @@ async fn usage_daily(State(s): State<Arc<AppState>>, Query(q): Query<UsageDailyQ
 async fn wifi_networks(State(s): State<Arc<AppState>>) -> Response {
     let clients = s.snapshot.read().await.clients.clone();
     Json(collectors::wifi_networks::collect(&s.nodes, &clients).await).into_response()
+}
+
+async fn node_capabilities(State(s): State<Arc<AppState>>, Path(node): Path<String>) -> Response {
+    let Some((config, ubus)) = s.nodes.iter().find(|(config, _)| config.name == node) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("unknown node {node:?}")})),
+        )
+            .into_response();
+    };
+    Json(capabilities::discover(ubus, config.transport == "local", s.config.shell.enabled).await)
+        .into_response()
 }
 
 #[derive(Deserialize)]
