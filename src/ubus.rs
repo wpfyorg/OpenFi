@@ -136,6 +136,57 @@ impl Ubus {
             }
         }
     }
+
+    /// Return the methods exposed by one ubus object. rpcd's `list` JSON-RPC method returns
+    /// the same object-to-signature map as `ubus -v list`; malformed replies are rejected.
+    pub async fn methods(&self, object: &str) -> Result<Vec<String>> {
+        match self {
+            Ubus::Cli => {
+                let out = tokio::process::Command::new("ubus")
+                    .args(["-v", "list", object])
+                    .output()
+                    .await
+                    .map_err(|e| format!("ubus: {e}"))?;
+                if !out.status.success() {
+                    return Err(format!("ubus -v list {object} failed"));
+                }
+                let body = String::from_utf8_lossy(&out.stdout);
+                Ok(body
+                    .lines()
+                    .filter_map(|line| {
+                        let line = line.trim();
+                        let (name, _) = line.split_once('{')?;
+                        let name = name
+                            .trim()
+                            .trim_end_matches(':')
+                            .trim()
+                            .trim_matches(['\'', '"']);
+                        (!name.is_empty()).then(|| name.to_owned())
+                    })
+                    .collect())
+            }
+            Ubus::Rpcd(r) => {
+                let value = r.rpc("list", json!([object])).await?;
+                let methods = value
+                    .get(object)
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| format!("invalid ubus list response for {object}"))?;
+                Ok(methods.keys().cloned().collect())
+            }
+            Ubus::Fixture { .. } => Err("method inventory unavailable in fixture mode".into()),
+        }
+    }
+
+    /// Read a router file through the rpcd `file` object. Used only for read-only inventory
+    /// files; path and response shape are validated by the caller.
+    pub async fn read_file(&self, path: &str) -> Result<String> {
+        let reply = self.call("file", "read", json!({"path": path})).await?;
+        reply
+            .get("data")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("invalid file.read response for {path}"))
+    }
 }
 
 impl Rpcd {

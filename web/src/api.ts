@@ -3,7 +3,7 @@
 import type {
   AuditEntry, DailyUsage, DiagRequest, DiagResult, KickRequest, LoginRequest, LoginResponse,
   LogLine, MeResponse, Plan, PlanStatus, RadioPatch, RatePoint, ReserveRequest, Snapshot,
-  WhitelistRequest, WifiNetwork, WifiPlanRequest,
+  WhitelistRequest, WifiNetwork, WifiPlanRequest, NodeCapabilities,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -84,6 +84,7 @@ export interface AddNodeRequest {
   wired_uplink?: string;
 }
 export const getConfiguredNodes = () => req<ConfiguredNode[]>("/nodes");
+export const getNodeCapabilities = (node: string) => req<NodeCapabilities>(`/nodes/${encodeURIComponent(node)}/capabilities`);
 export const addConfiguredNode = (body: AddNodeRequest) => write<ConfiguredNode>("/nodes", "POST", body);
 export const removeConfiguredNode = (name: string) =>
   write<{ removed: string }>(`/nodes/${encodeURIComponent(name)}/remove`, "POST");

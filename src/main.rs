@@ -8,6 +8,7 @@ mod actions;
 mod api;
 mod audit;
 mod auth;
+mod capabilities;
 mod collectors;
 mod config;
 mod diag;
