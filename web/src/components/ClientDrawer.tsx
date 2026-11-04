@@ -10,6 +10,7 @@ import { Icon } from "./icons";
 import { kick, reserve, whitelist } from "./clientActions";
 import { bitrate, bytes, dbm, relTime } from "../format";
 import type { Client, ClientUsage } from "../types";
+import { useSnap } from "../context";
 
 const BAN_OPTIONS: { value: number; label: string }[] = [
   { value: 60, label: "1 minute" },
@@ -24,6 +25,10 @@ export function ClientDrawer({
   client: Client; usage: ClientUsage | null; whitelisted: boolean;
   onWhitelistChange: (on: boolean) => void; onClose: () => void;
 }) {
+  const { snap, permissions } = useSnap();
+  const gateway = snap?.nodes.find((n) => n.role === "gateway")?.name;
+  const gatewayPermissions = gateway ? permissions[gateway] : undefined;
+  const nodePermissions = client.node ? permissions[client.node] : undefined;
   const [confirmKick, setConfirmKick] = useState(false);
   const [banSecs, setBanSecs] = useState(600);
   const [reserving, setReserving] = useState(false);
@@ -71,17 +76,18 @@ export function ClientDrawer({
           <span class="toggle-label">Whitelist (exempt from fair-use shaping)</span>
           <Toggle
             checked={whitelisted}
+            disabled={!gatewayPermissions?.whitelist}
             onChange={(on) => {
               onWhitelistChange(on);
               whitelist(client.mac, label, on, () => onWhitelistChange(!on));
             }}
           />
         </label>
-        <Button icon="id-card" onClick={() => { setIp(client.ip ?? ""); setName(client.hostname ?? ""); setReserving(true); }}>
+        <Button icon="id-card" disabled={!gatewayPermissions?.reserve} title={!gatewayPermissions?.reserve ? "rpcd ACL does not allow DHCP reservations" : undefined} onClick={() => { setIp(client.ip ?? ""); setName(client.hostname ?? ""); setReserving(true); }}>
           Reserve IP
         </Button>
-        <Button icon="ban" onClick={() => setConfirmKick(true)} disabled={!client.online || client.wired}
-          title={client.wired ? "Wired clients can't be deauthenticated" : undefined}>
+        <Button icon="ban" onClick={() => setConfirmKick(true)} disabled={!client.online || client.wired || !nodePermissions?.kick}
+          title={!nodePermissions?.kick ? "rpcd ACL does not allow disconnecting clients" : client.wired ? "Wired clients can't be deauthenticated" : undefined}>
           Kick from WiFi
         </Button>
       </div>
@@ -109,7 +115,7 @@ export function ClientDrawer({
         <Dialog title={`Reserve an IP for ${label}`} onClose={() => setReserving(false)} footer={
           <>
             <Button onClick={() => setReserving(false)}>Cancel</Button>
-            <button type="button" class="btn btn-primary" onClick={() => { reserve(client.mac, label, { ip, name }); setReserving(false); }}>
+            <button type="button" class="btn btn-primary" disabled={!gatewayPermissions?.reserve} onClick={() => { reserve(client.mac, label, { ip, name }); setReserving(false); }}>
               <Icon name="id-card" size={13} /> Reserve
             </button>
           </>

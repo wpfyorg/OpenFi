@@ -103,6 +103,59 @@ fn node_ubus<'a>(
     })
 }
 
+async fn require_acl(
+    ubus: &crate::ubus::Ubus,
+    scope: &str,
+    object: &str,
+    function: &str,
+) -> Result<(), String> {
+    enforce_acl_result(
+        ubus.has_access(scope, object, function).await,
+        scope,
+        object,
+        function,
+    )
+}
+
+fn enforce_acl_result(
+    result: Result<bool, String>,
+    scope: &str,
+    object: &str,
+    function: &str,
+) -> Result<(), String> {
+    match result {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!("rpcd ACL denies {scope}:{object}.{function}")),
+        Err(e) => Err(format!(
+            "could not verify rpcd ACL for {scope}:{object}.{function}: {e}"
+        )),
+    }
+}
+
+fn acl_denied(message: String) -> Response {
+    err(StatusCode::FORBIDDEN, message)
+}
+
+#[cfg(test)]
+mod acl_tests {
+    use super::*;
+
+    #[test]
+    fn denied_or_unverifiable_acl_never_authorizes_a_mutation() {
+        assert!(
+            enforce_acl_result(Ok(false), "uci", "wireless", "write")
+                .unwrap_err()
+                .contains("rpcd ACL denies")
+        );
+        assert!(
+            enforce_acl_result(Err("rpcd unavailable".into()), "uci", "wireless", "write")
+                .unwrap_err()
+                .contains("could not verify rpcd ACL")
+        );
+        assert!(enforce_acl_result(Ok(true), "uci", "wireless", "write").is_ok());
+    }
+}
+
 // -------------------------------------------------------------------------------------------
 // POST /clients/{mac}/kick
 // -------------------------------------------------------------------------------------------
@@ -152,6 +205,10 @@ pub async fn kick(
             return resp;
         }
     };
+    if let Err(e) = require_acl(ubus, "ubus", &format!("hostapd.{iface}"), "del_client").await {
+        audit(&state, &session, "kick", &mac, Err(&e)).await;
+        return acl_denied(e);
+    }
 
     // Mock mode: fixture `Ubus` calls just read static JSON off disk, and there's nothing
     // meaningful to fake for a `hostapd del_client` reply — treat it as an immediate success
@@ -234,6 +291,10 @@ pub async fn reserve(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "uci", "dhcp", "write").await {
+        audit(&state, &session, "reserve", &mac, Err(&e)).await;
+        return acl_denied(e);
+    }
 
     let target = format!("{mac} -> {} ({})", body.ip, body.name);
     // Mock mode: fixtures have no `uci add`/`apply`/`confirm` replies to read — treat it as an
@@ -312,6 +373,10 @@ pub async fn whitelist(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "ubus", "file", "exec").await {
+        audit(&state, &session, "whitelist", &mac, Err(&e)).await;
+        return acl_denied(e);
+    }
     let state_str = if body.on { "on" } else { "off" };
     let target = format!("{mac} -> {state_str}");
 
@@ -354,6 +419,10 @@ pub async fn reboot(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "ubus", "system", "reboot").await {
+        audit(&state, &session, "reboot", &node, Err(&e)).await;
+        return acl_denied(e);
+    }
     // Mock mode: don't actually try to exec a fixture file for this — just record it. A real
     // reboot obviously also never returns a normal ubus reply (the box goes down mid-call).
     let result = if state.mock.enabled() {
@@ -386,6 +455,10 @@ pub async fn wifi_reload(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "ubus", "network.wireless", "reload").await {
+        audit(&state, &session, "wifi_reload", &node, Err(&e)).await;
+        return acl_denied(e);
+    }
     // `network.wireless reload` restarts just the wifi stack (hostapd/wpa_supplicant/mesh),
     // which is what LuCI's Wireless page's "Restart" button does — a plain `network reload`
     // would also cycle wired interfaces/DHCP for no reason. Documented here since docs/api.md
@@ -441,6 +514,17 @@ pub async fn set_radio(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "uci", "wireless", "write").await {
+        audit(
+            &state,
+            &session,
+            "radio_set",
+            &format!("{node}/{radio}"),
+            Err(&e),
+        )
+        .await;
+        return acl_denied(e);
+    }
 
     let is_5ghz = {
         let snap = state.snapshot.read().await;

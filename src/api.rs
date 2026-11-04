@@ -202,7 +202,38 @@ async fn usage_daily(State(s): State<Arc<AppState>>, Query(q): Query<UsageDailyQ
     Json(rows).into_response()
 }
 
-async fn wifi_networks(State(s): State<Arc<AppState>>) -> Response {
+async fn wifi_networks(
+    State(s): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<Arc<session::Session>>,
+) -> Response {
+    for (node, _) in &s.nodes {
+        let Some(ubus) = session.node_ubus.get(&node.name) else {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(
+                    json!({ "error": format!("no authenticated rpcd session for {}", node.name) }),
+                ),
+            )
+                .into_response();
+        };
+        match ubus.has_access("uci", "wireless", "read").await {
+            Ok(true) => {}
+            Ok(false) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({ "error": format!("rpcd ACL denies uci:wireless.read on {}", node.name) })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({ "error": format!("could not verify rpcd ACL on {}: {e}", node.name) })),
+                )
+                    .into_response();
+            }
+        }
+    }
     let clients = s.snapshot.read().await.clients.clone();
     Json(collectors::wifi_networks::collect(&s.nodes, &clients).await).into_response()
 }

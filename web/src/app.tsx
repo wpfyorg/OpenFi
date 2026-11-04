@@ -22,6 +22,7 @@ export function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [Page, setPage] = useState<ComponentType | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [permissions, setPermissions] = useState<Record<string, import("./types").NodePermissions>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -46,12 +47,12 @@ export function App() {
   // so this only needs to fire the request — while the backend has no auth yet, /auth/me 404s and
   // is swallowed here, leaving the app usable so mock/dev work isn't blocked on login.
   useEffect(() => {
-    getMe().catch(() => {});
-  }, []);
+    getMe().then((me) => setPermissions(me.permissions ?? {})).catch(() => {});
+  }, [isLogin]);
 
   if (isLogin) {
     return (
-      <SnapshotContext.Provider value={{ snap, connected, state }}>
+      <SnapshotContext.Provider value={{ snap, connected, state, permissions }}>
         <main class="login-shell">
           {loadError ? <ErrorState message={loadError} /> : Page ? <Page /> : <Loading label="Loading…" />}
         </main>
@@ -61,7 +62,7 @@ export function App() {
   }
 
   return (
-    <SnapshotContext.Provider value={{ snap, connected, state }}>
+    <SnapshotContext.Provider value={{ snap, connected, state, permissions }}>
       <div class="shell">
         <Sidebar hash={hash} open={mobileNav} onNavigate={() => setMobileNav(false)} />
         <div class="shell-main">
