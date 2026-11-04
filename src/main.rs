@@ -11,6 +11,7 @@ mod auth;
 mod capabilities;
 mod collectors;
 mod config;
+mod config_history;
 mod diag;
 mod http;
 mod mock;

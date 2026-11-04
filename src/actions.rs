@@ -20,7 +20,7 @@ use serde_json::json;
 
 use crate::{
     AppState,
-    audit::{AuditEntry, AuditResult},
+    audit::{self, AuditEntry, AuditResult, ConfigChange},
     session::Session,
     uci_engine::{self, UciValue},
     validate,
@@ -51,12 +51,41 @@ async fn audit(
     state
         .audit
         .record(AuditEntry {
+            id: String::new(),
             ts: now(),
             user: session.user.clone(),
             action: action.to_owned(),
             target: target.to_owned(),
             result,
             detail,
+            config_changes: vec![],
+        })
+        .await;
+}
+
+async fn audit_config(
+    state: &AppState,
+    session: &Session,
+    action: &str,
+    target: &str,
+    result: Result<&str, &str>,
+    config_changes: Vec<ConfigChange>,
+) {
+    let (result, detail) = match result {
+        Ok(detail) => (AuditResult::Ok, detail.to_owned()),
+        Err(detail) => (AuditResult::Error, detail.to_owned()),
+    };
+    state
+        .audit
+        .record(AuditEntry {
+            id: String::new(),
+            ts: now(),
+            user: session.user.clone(),
+            action: action.into(),
+            target: target.into(),
+            result,
+            detail,
+            config_changes,
         })
         .await;
 }
@@ -299,6 +328,7 @@ pub async fn reserve(
     let target = format!("{mac} -> {} ({})", body.ip, body.name);
     // Mock mode: fixtures have no `uci add`/`apply`/`confirm` replies to read — treat it as an
     // immediate success (see the kick handler's identical note).
+    let mut created_section = None;
     let outcome: Result<(), String> = if state.mock.enabled() {
         Ok(())
     } else {
@@ -312,10 +342,11 @@ pub async fn reserve(
                 30,
                 std::time::Duration::from_secs(3),
                 || async {
-                    uci_engine::create(ubus, "dhcp", "host", None, &values)
+                    let section = uci_engine::create(ubus, "dhcp", "host", None, &values)
                         .await
-                        .map(|_| ())
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.to_string())?;
+                    created_section = Some(section);
+                    Ok(())
                 },
                 || async { crate::safe_apply::board_reachable(ubus).await },
             )
@@ -325,21 +356,49 @@ pub async fn reserve(
         }
         .await
     };
+    let config_changes = created_section.map_or_else(Vec::new, |section| {
+        [
+            ("mac", mac.clone()),
+            ("ip", body.ip.clone()),
+            ("name", body.name.clone()),
+        ]
+        .into_iter()
+        .map(|(option, value)| ConfigChange {
+            node: gateway.clone(),
+            config: "dhcp".into(),
+            section: section.clone(),
+            option: option.into(),
+            before: None,
+            after: Some(value),
+            restorable: true,
+            restore_section: true,
+        })
+        .collect()
+    });
 
     match outcome {
         Ok(()) => {
-            audit(
+            audit_config(
                 &state,
                 &session,
                 "reserve",
                 &target,
                 Ok(warning.as_deref().unwrap_or("ok")),
+                config_changes,
             )
             .await;
             Json(json!({ "ok": true, "warning": warning })).into_response()
         }
         Err(e) => {
-            audit(&state, &session, "reserve", &target, Err(&e)).await;
+            audit_config(
+                &state,
+                &session,
+                "reserve",
+                &target,
+                Err(&e),
+                config_changes,
+            )
+            .await;
             err(StatusCode::BAD_GATEWAY, e)
         }
     }
@@ -536,7 +595,7 @@ pub async fn set_radio(
             .unwrap_or(false)
     };
 
-    let mut values = BTreeMap::new();
+    let mut values: BTreeMap<String, UciValue> = BTreeMap::new();
     if let Some(disabled) = body.disabled {
         values.insert("disabled".into(), UciValue::Bool(disabled));
     }
@@ -570,6 +629,46 @@ pub async fn set_radio(
         _ => None,
     };
     let target = format!("{node}/{radio}");
+    let old_section = uci_engine::read(ubus, "wireless")
+        .await
+        .ok()
+        .and_then(|sections| sections.into_iter().find(|section| section.name == radio));
+    let config_changes: Vec<ConfigChange> = values
+        .iter()
+        .map(|(option, after)| {
+            let before = old_section
+                .as_ref()
+                .and_then(|section| section.options.get(option));
+            let secret = matches!(
+                option.as_str(),
+                "key" | "password" | "psk" | "private_key" | "auth_token"
+            );
+            let show = |value: Option<&serde_json::Value>| {
+                value.map(|value| {
+                    if secret {
+                        audit::mask_secret("").to_owned()
+                    } else if let Some(text) = value.as_str() {
+                        text.to_owned()
+                    } else {
+                        value.to_string()
+                    }
+                })
+            };
+            ConfigChange {
+                node: node.clone(),
+                config: "wireless".into(),
+                section: radio.clone(),
+                option: option.clone(),
+                before: show(before),
+                after: show(Some(&after.to_wire())),
+                restorable: !secret
+                    && old_section.is_some()
+                    && before.is_none_or(|value| !value.is_array() && !value.is_object())
+                    && !matches!(after, UciValue::List(_)),
+                restore_section: false,
+            }
+        })
+        .collect();
     // Mock mode: same as `reserve` — no fixture models `uci set`/`apply`/`confirm` replies.
     let outcome: Result<(), String> = if state.mock.enabled() {
         Ok(())
@@ -599,11 +698,27 @@ pub async fn set_radio(
                 .mock
                 .set_radio(&node, &radio, body.disabled, channel_num, body.txpower_dbm)
                 .await;
-            audit(&state, &session, "radio_set", &target, Ok("ok")).await;
+            audit_config(
+                &state,
+                &session,
+                "radio_set",
+                &target,
+                Ok("ok"),
+                config_changes,
+            )
+            .await;
             Json(json!({ "ok": true })).into_response()
         }
         Err(e) => {
-            audit(&state, &session, "radio_set", &target, Err(&e)).await;
+            audit_config(
+                &state,
+                &session,
+                "radio_set",
+                &target,
+                Err(&e),
+                config_changes,
+            )
+            .await;
             err(StatusCode::BAD_GATEWAY, e)
         }
     }

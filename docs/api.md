@@ -144,7 +144,11 @@ interface Health { status: "ok" | "degraded" | "down"; reasons: string[] }
 | `GET /wifi/networks` | `WifiNetwork[]` (see below) |
 | `GET /nodes/{node}/capabilities` | `NodeCapabilities`; failed probes omit capabilities |
 | `GET /logs?node=<name>&lines=200` | `{ ts, node, level: "info"\|"warn"\|"err", source, msg }[]` from `logread` |
-| `GET /audit` | `{ ts, user, action, target, result: "ok"\|"error", detail }[]` newest first |
+| `GET /audit` | `{ id, ts, user, action, target, result: "ok"\|"error", detail, config_changes? }[]` newest first |
+| `GET /config-history` | Configuration audit rows with node-scoped masked UCI `before`/`after` changes |
+| `POST /config-history/{id}/restore` | Restore a successful supported row if current values still match its recorded `after` values |
+
+Configuration history is stored in the audit JSONL file (default `/etc/openwrtfi/audit.jsonl`, configurable with `audit_log`). WiFi plan and radio rows redact key/password values and do not allow restoring secret or list-valued options. DHCP reservation restore removes its created host section only when every recorded field matches and the section has no extra options. Restore preflights state and refuses stale changes before staging; scalar non-secret UCI values are supported.
 
 Daily usage accumulates deltas from the gateway WAN interface counters and counts distinct devices
 observed online each local calendar day. The local day uses `local_utc_offset_secs` from the

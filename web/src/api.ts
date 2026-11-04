@@ -66,6 +66,9 @@ export const getLogs = (opts: { node?: string; lines?: number } = {}) => {
   return req<LogLine[]>(`/logs?${p}`);
 };
 export const getAudit = () => req<AuditEntry[]>("/audit");
+export const getConfigHistory = () => req<AuditEntry[]>("/config-history");
+export const restoreConfigHistory = (id: string) =>
+  write<{ ok: boolean }>(`/config-history/${encodeURIComponent(id)}/restore`, "POST");
 
 // ---- controller nodes ----
 export interface ConfiguredNode {

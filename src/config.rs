@@ -120,7 +120,7 @@ impl Default for Config {
             daily_usage_file: "/etc/openwrtfi/daily.json".into(),
             local_utc_offset_secs: 0,
             shell: ShellConfig::default(),
-            audit_log: "/tmp/openwrtfi-audit.log".into(),
+            audit_log: "/etc/openwrtfi/audit.jsonl".into(),
         }
     }
 }
@@ -151,6 +151,7 @@ impl Config {
         // Mock runs write state; keep it out of the fixtures (they're checked-in test data).
         self.history_file = std::env::temp_dir().join("openwrtfi-mock-history.json");
         self.daily_usage_file = std::env::temp_dir().join("openwrtfi-mock-daily.json");
+        self.audit_log = std::env::temp_dir().join("openwrtfi-mock-audit.jsonl");
     }
 
     pub fn ubus_for(&self, n: &NodeConfig) -> Ubus {
