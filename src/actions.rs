@@ -7,7 +7,7 @@
 //! mode — also mutates `AppState.mock` so the next snapshot visibly reflects it (whitelist
 //! toggle, radio disabled), per `docs/api.md`'s "Mock mode" note.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     Json,
@@ -23,6 +23,7 @@ use crate::{
     audit::{AuditEntry, AuditResult},
     collectors::uci,
     session::Session,
+    uci_engine::{self, UciValue},
     validate,
 };
 
@@ -242,13 +243,13 @@ pub async fn reserve(
         Ok(())
     } else {
         async {
-            uci::add(
-                ubus,
-                "dhcp",
-                "host",
-                json!({ "mac": mac, "ip": body.ip, "name": body.name }),
-            )
-            .await?;
+            let mut values = BTreeMap::new();
+            values.insert("mac".into(), UciValue::String(mac.clone()));
+            values.insert("ip".into(), UciValue::String(body.ip.clone()));
+            values.insert("name".into(), UciValue::String(body.name.clone()));
+            uci_engine::create(ubus, "dhcp", "host", None, &values)
+                .await
+                .map_err(|e| e.to_string())?;
             uci::apply_confirm(ubus, 30).await
         }
         .await
@@ -441,13 +442,13 @@ pub async fn set_radio(
             .unwrap_or(false)
     };
 
-    let mut values = serde_json::Map::new();
+    let mut values = BTreeMap::new();
     if let Some(disabled) = body.disabled {
-        values.insert("disabled".into(), json!(if disabled { "1" } else { "0" }));
+        values.insert("disabled".into(), UciValue::Bool(disabled));
     }
     match &body.channel {
         Some(ChannelValue::Auto(_)) => {
-            values.insert("channel".into(), json!("auto"));
+            values.insert("channel".into(), UciValue::String("auto".into()));
         }
         Some(ChannelValue::Number(ch)) => {
             if !validate::channel_ok(is_5ghz, *ch) {
@@ -456,7 +457,7 @@ pub async fn set_radio(
                     "channel out of range for this band",
                 );
             }
-            values.insert("channel".into(), json!(ch.to_string()));
+            values.insert("channel".into(), UciValue::Integer(i64::from(*ch)));
         }
         None => {}
     }
@@ -464,7 +465,7 @@ pub async fn set_radio(
         if !validate::txpower_ok(dbm) {
             return err(StatusCode::BAD_REQUEST, "txpower_dbm must be 0-30");
         }
-        values.insert("txpower".into(), json!(dbm.to_string()));
+        values.insert("txpower".into(), UciValue::Integer(i64::from(dbm)));
     }
     if values.is_empty() {
         return err(StatusCode::BAD_REQUEST, "no fields to change");
@@ -480,7 +481,9 @@ pub async fn set_radio(
         Ok(())
     } else {
         async {
-            uci::set(ubus, "wireless", &radio, &values).await?;
+            uci_engine::update(ubus, "wireless", &radio, &values)
+                .await
+                .map_err(|e| e.to_string())?;
             uci::apply_confirm(ubus, 30).await
         }
         .await

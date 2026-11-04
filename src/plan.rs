@@ -10,7 +10,7 @@
 //! (`gateway_may_confirm`).
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -22,17 +22,17 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     AppState,
     audit::{self, AuditEntry, AuditResult},
-    collectors::uci::{self, Section},
     config::NodeConfig,
     model::{Plan, PlanDiff, PlanRunState, PlanStatus, StepState, StepStatus},
     session::Session,
     ubus::Ubus,
+    uci_engine::{self, Section, UciValue},
 };
 
 fn err(code: StatusCode, msg: impl Into<String>) -> Response {
@@ -122,7 +122,7 @@ pub struct PlanRequest {
 struct NodeChange {
     node: String,
     section: String,
-    values: Map<String, Value>,
+    values: BTreeMap<String, UciValue>,
 }
 
 /// Locates every wifi-iface section (across every node) belonging to the network named by
@@ -136,7 +136,10 @@ async fn discover(
 ) -> Option<(HashMap<String, Vec<Section>>, HashMap<String, Vec<String>>)> {
     let mut per_node = HashMap::new();
     for (nc, ubus) in nodes {
-        per_node.insert(nc.name.clone(), uci::get(ubus, "wireless").await);
+        per_node.insert(
+            nc.name.clone(),
+            uci_engine::read(ubus, "wireless").await.unwrap_or_default(),
+        );
     }
 
     let key = per_node.values().find_map(|sections| {
@@ -190,7 +193,7 @@ fn build_changes(
     present: &HashMap<String, Vec<String>>,
     req: &PlanRequest,
 ) -> Vec<NodeChange> {
-    let mut by_node_section: HashMap<(String, String), Map<String, Value>> = HashMap::new();
+    let mut by_node_section: HashMap<(String, String), BTreeMap<String, UciValue>> = HashMap::new();
 
     for (node, section_names) in present {
         for section in section_names {
@@ -198,32 +201,32 @@ fn build_changes(
                 .entry((node.clone(), section.clone()))
                 .or_default();
             if let Some(ssid) = &req.ssid {
-                values.insert("ssid".into(), json!(ssid));
+                values.insert("ssid".into(), UciValue::String(ssid.clone()));
             }
             if let Some(key) = &req.key {
-                values.insert("key".into(), json!(key));
+                values.insert("key".into(), UciValue::String(key.clone()));
             }
             if let Some(sec) = &req.security {
-                values.insert("encryption".into(), json!(sec));
+                values.insert("encryption".into(), UciValue::String(sec.clone()));
             }
             if let Some(roaming) = &req.roaming {
                 if let Some(ft) = roaming.ft {
-                    values.insert("ieee80211r".into(), json!(if ft { "1" } else { "0" }));
+                    values.insert("ieee80211r".into(), UciValue::Bool(ft));
                 }
                 if let Some(v) = roaming.ft_over_ds {
-                    values.insert("ft_over_ds".into(), json!(if v { "1" } else { "0" }));
+                    values.insert("ft_over_ds".into(), UciValue::Bool(v));
                 }
                 if let Some(md) = &roaming.mobility_domain {
-                    values.insert("mobility_domain".into(), json!(md));
+                    values.insert("mobility_domain".into(), UciValue::String(md.clone()));
                 }
                 if let Some(v) = roaming.rrm {
-                    values.insert("ieee80211k".into(), json!(if v { "1" } else { "0" }));
+                    values.insert("ieee80211k".into(), UciValue::Bool(v));
                 }
                 if let Some(v) = roaming.btm {
-                    values.insert("ieee80211v".into(), json!(if v { "1" } else { "0" }));
+                    values.insert("ieee80211v".into(), UciValue::Bool(v));
                 }
                 if let Some(pmf) = roaming.pmf.as_deref().and_then(pmf_value) {
-                    values.insert("ieee80211w".into(), json!(pmf));
+                    values.insert("ieee80211w".into(), UciValue::String(pmf.into()));
                 }
             }
         }
@@ -252,7 +255,7 @@ fn build_changes(
                     by_node_section
                         .entry((node.clone(), section_name.clone()))
                         .or_default()
-                        .insert("disabled".into(), json!(if on { "0" } else { "1" }));
+                        .insert("disabled".into(), UciValue::Bool(!on));
                 }
             }
         }
@@ -306,12 +309,7 @@ fn diff_lines(order: &[String], changes: &[NodeChange]) -> Vec<PlanDiff> {
                 .filter(|c| &c.node == node)
                 .flat_map(|c| {
                     c.values.iter().map(move |(k, v)| {
-                        audit::mask_uci_line(
-                            "wireless",
-                            &c.section,
-                            k,
-                            v.as_str().unwrap_or_default(),
-                        )
+                        audit::mask_uci_line("wireless", &c.section, k, &v.as_text())
                     })
                 })
                 .collect();
@@ -471,8 +469,10 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
             Exec::Real { ubus } => {
                 let mut set_err = None;
                 for c in &step.changes {
-                    if let Err(e) = uci::set(ubus, "wireless", &c.section, &c.values).await {
-                        set_err = Some(e);
+                    if let Err(e) =
+                        uci_engine::update(ubus, "wireless", &c.section, &c.values).await
+                    {
+                        set_err = Some(e.to_string());
                         break;
                     }
                 }
@@ -822,9 +822,9 @@ mod tests {
             node: "ap-2".into(),
             section: "default_radio1".into(),
             values: {
-                let mut m = Map::new();
-                m.insert("ssid".into(), json!("NewWifi"));
-                m.insert("key".into(), json!("supersecret"));
+                let mut m = BTreeMap::new();
+                m.insert("ssid".into(), UciValue::String("NewWifi".into()));
+                m.insert("key".into(), UciValue::String("supersecret".into()));
                 m
             },
         }];
