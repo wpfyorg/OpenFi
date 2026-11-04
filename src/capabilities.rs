@@ -86,10 +86,10 @@ pub async fn discover(ubus: &Ubus, gateway: bool, shell_enabled: bool) -> Capabi
 
     result.packages = installed_packages(ubus).await.unwrap_or_default();
     result.protocols = protocols_for(&result.packages);
-    if let Ok(services) = ubus.call("service", "list", serde_json::json!({})).await {
-        if let Some(map) = services.as_object() {
-            result.services = map.keys().cloned().collect();
-        }
+    if let Ok(services) = ubus.call("service", "list", serde_json::json!({})).await
+        && let Some(map) = services.as_object()
+    {
+        result.services = map.keys().cloned().collect();
     }
     if gateway && shell_enabled {
         result.actions.push("shell.open".into());
