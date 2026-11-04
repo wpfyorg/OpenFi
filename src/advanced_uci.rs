@@ -33,16 +33,12 @@ async fn require_uci_acl(
     ubus: &crate::ubus::Ubus,
     config: &str,
     function: &str,
-) -> Result<(), Response> {
+) -> Result<(), String> {
     match ubus.has_access("uci", config, function).await {
         Ok(true) => Ok(()),
-        Ok(false) => Err(err(
-            StatusCode::FORBIDDEN,
-            format!("rpcd ACL denies uci:{config}.{function}"),
-        )),
-        Err(e) => Err(err(
-            StatusCode::FORBIDDEN,
-            format!("could not verify rpcd ACL for uci:{config}.{function}: {e}"),
+        Ok(false) => Err(format!("rpcd ACL denies uci:{config}.{function}")),
+        Err(e) => Err(format!(
+            "could not verify rpcd ACL for uci:{config}.{function}: {e}"
         )),
     }
 }
@@ -275,8 +271,8 @@ pub async fn read_config(
         Ok(u) => u,
         Err(r) => return r,
     };
-    if let Err(response) = require_uci_acl(ubus, &config, "read").await {
-        return response;
+    if let Err(message) = require_uci_acl(ubus, &config, "read").await {
+        return err(StatusCode::FORBIDDEN, message);
     }
     match uci_engine::read(ubus, &config).await {
         Ok(sections) => {
@@ -300,8 +296,8 @@ pub async fn preview(
         Ok(u) => u,
         Err(r) => return r,
     };
-    if let Err(response) = require_uci_acl(ubus, &config, "read").await {
-        return response;
+    if let Err(message) = require_uci_acl(ubus, &config, "read").await {
+        return err(StatusCode::FORBIDDEN, message);
     }
     let sections = match uci_engine::read(ubus, &config).await {
         Ok(s) => s,
@@ -326,11 +322,11 @@ pub async fn apply(
         Ok(u) => u,
         Err(r) => return r,
     };
-    if let Err(response) = require_uci_acl(ubus, &config, "read").await {
-        return response;
+    if let Err(message) = require_uci_acl(ubus, &config, "read").await {
+        return err(StatusCode::FORBIDDEN, message);
     }
-    if let Err(response) = require_uci_acl(ubus, &config, "write").await {
-        return response;
+    if let Err(message) = require_uci_acl(ubus, &config, "write").await {
+        return err(StatusCode::FORBIDDEN, message);
     }
     if state.mock.enabled() {
         return err(
