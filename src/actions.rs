@@ -21,7 +21,6 @@ use serde_json::json;
 use crate::{
     AppState,
     audit::{AuditEntry, AuditResult},
-    collectors::uci,
     session::Session,
     uci_engine::{self, UciValue},
     validate,
@@ -247,10 +246,21 @@ pub async fn reserve(
             values.insert("mac".into(), UciValue::String(mac.clone()));
             values.insert("ip".into(), UciValue::String(body.ip.clone()));
             values.insert("name".into(), UciValue::String(body.name.clone()));
-            uci_engine::create(ubus, "dhcp", "host", None, &values)
-                .await
-                .map_err(|e| e.to_string())?;
-            uci::apply_confirm(ubus, 30).await
+            crate::safe_apply::run(
+                ubus,
+                30,
+                std::time::Duration::from_secs(3),
+                || async {
+                    uci_engine::create(ubus, "dhcp", "host", None, &values)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                },
+                || async { crate::safe_apply::board_reachable(ubus).await },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
         }
         .await
     };
@@ -481,10 +491,20 @@ pub async fn set_radio(
         Ok(())
     } else {
         async {
-            uci_engine::update(ubus, "wireless", &radio, &values)
-                .await
-                .map_err(|e| e.to_string())?;
-            uci::apply_confirm(ubus, 30).await
+            crate::safe_apply::run(
+                ubus,
+                30,
+                std::time::Duration::from_secs(3),
+                || async {
+                    uci_engine::update(ubus, "wireless", &radio, &values)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+                || async { crate::safe_apply::board_reachable(ubus).await },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
         }
         .await
     };
