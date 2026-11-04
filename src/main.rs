@@ -5,6 +5,7 @@
 //! endpoint that LuCI already exposes — so the APs need nothing installed.
 
 mod actions;
+mod advanced_uci;
 mod api;
 mod audit;
 mod auth;

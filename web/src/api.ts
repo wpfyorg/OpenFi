@@ -112,6 +112,16 @@ export const reloadWifi = (node: string) => write<void>(`/nodes/${encodeURICompo
 export const patchRadio = (node: string, radio: string, body: RadioPatch) =>
   write<void>(`/nodes/${encodeURIComponent(node)}/radios/${encodeURIComponent(radio)}`, "POST", body);
 
+export type AdvancedUciSections = Record<string, Record<string, unknown>>;
+export interface AdvancedUciConfig { node: string; config: string; sections: AdvancedUciSections }
+export interface AdvancedUciPreview { node: string; config: string; changes: string[] }
+const uciPath = (node: string, config: string) => `/nodes/${encodeURIComponent(node)}/uci/${encodeURIComponent(config)}`;
+export const getAdvancedUci = (node: string, config: string) => req<AdvancedUciConfig>(uciPath(node, config));
+export const previewAdvancedUci = (node: string, config: string, sections: AdvancedUciSections) =>
+  write<AdvancedUciPreview>(`${uciPath(node, config)}/preview`, "POST", { sections });
+export const applyAdvancedUci = (node: string, config: string, sections: AdvancedUciSections) =>
+  write<{ ok: boolean; changes: string[] }>(`${uciPath(node, config)}/apply`, "POST", { sections });
+
 // ---- multi-node wifi plan ----
 export const planWifiNetwork = (id: string, body: WifiPlanRequest) =>
   write<Plan>(`/wifi/networks/${encodeURIComponent(id)}/plan`, "POST", body);

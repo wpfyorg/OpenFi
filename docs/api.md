@@ -207,6 +207,14 @@ before making a router call; rpcd remains the final enforcement point.
 | `POST /nodes/{node}/reboot` | | `system reboot` |
 | `POST /nodes/{node}/wifi/reload` | | `network.wireless` reload |
 | `POST /nodes/{node}/radios/{radio}` | `{ disabled?: boolean, channel?: number \| "auto", txpower_dbm?: number }` | `uci set wireless.<radio>.*` → apply with rollback → confirm |
+| `GET /nodes/{node}/uci/{config}` | | Existing UCI section options as `{ node, config, sections: { section: { option: value } } }`; sensitive options are masked, and the mask preserves the current value if sent back unchanged |
+| `POST /nodes/{node}/uci/{config}/preview` | `{ sections: { section: { option: value } } }` | Validated diff for existing sections; option values accept strings, booleans, integers, and scalar lists. Section identity/type/order cannot change. |
+| `POST /nodes/{node}/uci/{config}/apply` | Same as preview | Stages the validated diff, calls `uci apply` with a 30-second rollback window, confirms after a fresh node health check, and audits a secret-masked diff. Disabled in mock mode. |
+
+Advanced UCI reads/previews require the authenticated rpcd session's `uci:<config>.read` grant;
+apply rechecks both `uci:<config>.read` and `uci:<config>.write`. The packaged non-root admin ACL
+also grants the ubus `uci get/changes/set/add/delete/apply/confirm/revert` and `system board`
+methods needed by the same guarded transaction flow.
 
 The topology node panel requests capabilities for its selected node. Wi-Fi reload, radio
 configuration, reboot, and shell controls appear only when that node reports the matching

@@ -165,6 +165,11 @@ fn identifier(field: &'static str, value: &str) -> Result<()> {
     }
 }
 
+/// Validate an option name before a caller builds an edit preview.
+pub fn validate_option_name(value: &str) -> Result<()> {
+    identifier("option", value)
+}
+
 fn options(values: &BTreeMap<String, UciValue>) -> Result<Map<String, Value>> {
     let mut wire = Map::new();
     for (key, value) in values {
