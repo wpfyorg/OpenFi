@@ -30,6 +30,7 @@ use crate::{
     audit::{self, AuditEntry, AuditResult},
     config::NodeConfig,
     model::{Plan, PlanDiff, PlanRunState, PlanStatus, StepState, StepStatus},
+    safe_apply,
     session::Session,
     ubus::Ubus,
     uci_engine::{self, Section, UciValue},
@@ -473,69 +474,59 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
                     Ok(())
                 }
             }
-            Exec::Real { ubus } => {
-                let mut set_err = None;
-                for c in &step.changes {
-                    if let Err(e) =
-                        uci_engine::update(ubus, "wireless", &c.section, &c.values).await
-                    {
-                        set_err = Some(e.to_string());
-                        break;
+            Exec::Real { ubus } => safe_apply::run(
+                ubus,
+                30,
+                settle_delay(),
+                || async {
+                    for change in &step.changes {
+                        uci_engine::update(ubus, "wireless", &change.section, &change.values)
+                            .await
+                            .map_err(|e| e.to_string())?;
                     }
-                }
-                if let Some(e) = set_err {
-                    Err((StepState::Failed, e))
-                } else {
-                    match ubus
-                        .call("uci", "apply", json!({ "rollback": true, "timeout": 30 }))
-                        .await
-                    {
-                        Err(e) => Err((StepState::Failed, e)),
-                        Ok(_) => {
-                            tokio::time::sleep(settle_delay()).await;
-                            set_status(
-                                &record,
-                                &step.node,
-                                StepState::Confirming,
-                                Some(now() + 5),
-                                None,
-                            )
-                            .await;
-                            let self_ok = ubus.call("system", "board", json!({})).await.is_ok();
-                            let mut aps_ok = true;
-                            if step.is_gateway {
-                                for prior in &confirmed_real {
-                                    if prior.is_gateway {
-                                        continue;
-                                    }
-                                    if let Exec::Real { ubus: pu } = &prior.exec
-                                        && pu.call("system", "board", json!({})).await.is_err()
-                                    {
-                                        aps_ok = false;
-                                        break;
-                                    }
-                                }
+                    Ok(())
+                },
+                || async {
+                    set_status(
+                        &record,
+                        &step.node,
+                        StepState::Confirming,
+                        Some(now() + 5),
+                        None,
+                    )
+                    .await;
+                    let self_ok = safe_apply::board_reachable(ubus).await;
+                    let mut aps_ok = true;
+                    if step.is_gateway {
+                        for prior in &confirmed_real {
+                            if prior.is_gateway {
+                                continue;
                             }
-                            let ok = if step.is_gateway {
-                                gateway_may_confirm(self_ok, aps_ok)
-                            } else {
-                                self_ok
-                            };
-                            if ok {
-                                ubus.call("uci", "confirm", json!({}))
-                                    .await
-                                    .map(|_| ())
-                                    .map_err(|e| (StepState::Failed, e))
-                            } else {
-                                Err((
-                                    StepState::RolledBack,
-                                    "node unreachable after apply; rolled back".to_owned(),
-                                ))
+                            if let Exec::Real { ubus: prior_ubus } = &prior.exec
+                                && !safe_apply::board_reachable(prior_ubus).await
+                            {
+                                aps_ok = false;
+                                break;
                             }
                         }
                     }
-                }
-            }
+                    if step.is_gateway {
+                        gateway_may_confirm(self_ok, aps_ok)
+                    } else {
+                        self_ok
+                    }
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| {
+                let state = if matches!(e, safe_apply::Error::RollbackArmed { .. }) {
+                    StepState::RolledBack
+                } else {
+                    StepState::Failed
+                };
+                (state, e.to_string())
+            }),
         };
 
         match outcome {

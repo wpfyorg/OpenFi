@@ -17,6 +17,7 @@ mod mock;
 mod model;
 mod nodes_api;
 mod plan;
+mod safe_apply;
 mod session;
 mod shell;
 #[cfg(test)]
