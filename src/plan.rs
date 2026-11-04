@@ -535,10 +535,7 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
                             ));
                         }
                         Err(e) => {
-                            return Err(format!(
-                                "could not verify rpcd ACL on {}: {e}",
-                                step.node
-                            ));
+                            return Err(format!("could not verify rpcd ACL on {}: {e}", step.node));
                         }
                     }
                     for change in &step.changes {
