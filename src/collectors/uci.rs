@@ -16,7 +16,13 @@ pub use crate::uci_engine::Section;
 
 /// All sections of a config, in the order the daemon returned them (uci preserves file order).
 pub async fn get(ubus: &Ubus, config: &str) -> Vec<Section> {
-    uci_engine::read(ubus, config).await.unwrap_or_default()
+    match uci_engine::read(ubus, config).await {
+        Ok(sections) => sections,
+        Err(e) => {
+            log::warn!("uci read {config}: {e}; using empty configuration");
+            Vec::new()
+        }
+    }
 }
 
 /// The rollback-safe apply/confirm dance from `docs/api.md`: `uci apply {rollback:true,

@@ -136,10 +136,17 @@ async fn discover(
 ) -> Option<(HashMap<String, Vec<Section>>, HashMap<String, Vec<String>>)> {
     let mut per_node = HashMap::new();
     for (nc, ubus) in nodes {
-        per_node.insert(
-            nc.name.clone(),
-            uci_engine::read(ubus, "wireless").await.unwrap_or_default(),
-        );
+        let sections = match uci_engine::read(ubus, "wireless").await {
+            Ok(sections) => sections,
+            Err(e) => {
+                log::warn!(
+                    "wifi plan discovery: uci read wireless on node {} failed: {e}; using empty configuration",
+                    nc.name
+                );
+                Vec::new()
+            }
+        };
+        per_node.insert(nc.name.clone(), sections);
     }
 
     let key = per_node.values().find_map(|sections| {

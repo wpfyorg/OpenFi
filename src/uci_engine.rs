@@ -188,15 +188,18 @@ pub async fn read(ubus: &Ubus, config: &str) -> Result<Vec<Section>> {
         .ok_or_else(|| Error::Protocol("get response has no values object".into()))?;
     let mut sections = Vec::with_capacity(values.len());
     for (name, raw) in values {
-        identifier("section", name)?;
-        let fields = raw
-            .as_object()
-            .ok_or_else(|| Error::Protocol(format!("section {name:?} is not an object")))?;
-        let kind = fields
-            .get(".type")
-            .and_then(Value::as_str)
-            .ok_or_else(|| Error::Protocol(format!("section {name:?} has no .type")))?;
-        identifier("type", kind)?;
+        if identifier("section", name).is_err() {
+            continue;
+        }
+        let Some(fields) = raw.as_object() else {
+            continue;
+        };
+        let Some(kind) = fields.get(".type").and_then(Value::as_str) else {
+            continue;
+        };
+        if identifier("type", kind).is_err() {
+            continue;
+        }
         let anonymous = fields
             .get(".anonymous")
             .and_then(Value::as_bool)
@@ -207,7 +210,9 @@ pub async fn read(ubus: &Ubus, config: &str) -> Result<Vec<Section>> {
             if key.starts_with('.') {
                 continue;
             }
-            identifier("option", key)?;
+            if identifier("option", key).is_err() {
+                continue;
+            }
             section_options.insert(key.clone(), value.clone());
         }
         sections.push(Section {
@@ -391,6 +396,50 @@ mod tests {
         order(&ubus, "network", &["lan".into(), "wan".into()])
             .await
             .unwrap();
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_skips_invalid_sections_and_options_without_losing_valid_data() {
+        let dir = fixture_dir("tolerant-read");
+        fs::write(
+            dir.join("uci.get.wireless.json"),
+            r#"{
+                "values": {
+                    "radio0": {
+                        ".type": "wifi-device",
+                        ".index": 0,
+                        "channel": "auto",
+                        "bad.option": "ignored"
+                    },
+                    "bad.section": {
+                        ".type": "wifi-device",
+                        ".index": 1
+                    },
+                    "missing_type": {
+                        ".index": 2,
+                        "ssid": "ignored"
+                    },
+                    "not_object": "ignored",
+                    "default_radio0": {
+                        ".type": "wifi-iface",
+                        ".index": 3,
+                        "ssid": "Home"
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        let ubus = Ubus::fixture(dir.clone());
+
+        let sections = read(&ubus, "wireless").await.unwrap();
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].name, "radio0");
+        assert_eq!(sections[0].get("channel"), Some("auto"));
+        assert!(!sections[0].options.contains_key("bad.option"));
+        assert_eq!(sections[1].name, "default_radio0");
+        assert_eq!(sections[1].get("ssid"), Some("Home"));
 
         fs::remove_dir_all(dir).unwrap();
     }
