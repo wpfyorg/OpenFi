@@ -113,7 +113,12 @@ pub async fn login(
 }
 
 pub async fn me(Extension(session): Extension<Arc<Session>>) -> Response {
-    Json(json!({ "user": session.user, "expires": session.expires_at() })).into_response()
+    Json(json!({
+        "user": session.user,
+        "expires": session.expires_at(),
+        "permissions": session.permissions,
+    }))
+    .into_response()
 }
 
 pub async fn logout(

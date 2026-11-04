@@ -179,12 +179,19 @@ interface WifiNetwork {
 | Route | Body | Result |
 |---|---|---|
 | `POST /auth/login` | `{ username, password }` | `200 { user }` + Set-Cookie, or `401` |
-| `GET /auth/me` | | `{ user, expires }` or `401` |
+| `GET /auth/me` | | `{ user, expires, permissions }` or `401` |
 | `POST /auth/logout` | | `204`, cookie cleared |
 
 Login validates with `ubus call session login` on the gateway (the LuCI root password). The session
 also logs in to each AP's rpcd with the same credentials, so remote writes run under the user's own
 rpcd sessions and existing ACLs. Sessions expire after 30 min idle.
+
+`permissions` maps node names to booleans derived from that node's authenticated rpcd session:
+`read` (`uci:wireless.read`), `radio_write` (`uci:wireless.write`), `reserve`
+(`uci:dhcp.write`), `whitelist` (`ubus:file.exec`), `kick` (`ubus:hostapd.*.del_client`),
+`reboot` (`ubus:system.reboot`), and `wifi_reload` (`ubus:network.wireless.reload`). A failed or
+malformed ACL query denies the capability. Mutation handlers recheck the relevant ACL immediately
+before making a router call; rpcd remains the final enforcement point.
 
 ## Actions (all require session + `X-OpenWrtFi: 1`; each writes an audit entry)
 

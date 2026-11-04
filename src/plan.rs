@@ -479,6 +479,21 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
                 30,
                 settle_delay(),
                 || async {
+                    match ubus.has_access("uci", "wireless", "write").await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Err(format!(
+                                "rpcd ACL denies uci:wireless.write on {}",
+                                step.node
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(format!(
+                                "could not verify rpcd ACL on {}: {e}",
+                                step.node
+                            ));
+                        }
+                    }
                     for change in &step.changes {
                         uci_engine::update(ubus, "wireless", &change.section, &change.values)
                             .await
@@ -639,6 +654,21 @@ pub async fn create_plan(
                     format!("no write session for {node}"),
                 );
             };
+            match ubus.has_access("uci", "wireless", "write").await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return err(
+                        StatusCode::FORBIDDEN,
+                        format!("rpcd ACL denies uci:wireless.write on {node}"),
+                    );
+                }
+                Err(e) => {
+                    return err(
+                        StatusCode::FORBIDDEN,
+                        format!("could not verify rpcd ACL on {node}: {e}"),
+                    );
+                }
+            }
             Exec::Real { ubus: ubus.clone() }
         };
         steps_exec.push(StepExec {
@@ -703,6 +733,25 @@ pub async fn apply_plan(
         let mut record = record_arc.write().await;
         if record.started {
             return err(StatusCode::CONFLICT, "plan already applied");
+        }
+        for step in &record.steps_exec {
+            if let Exec::Real { ubus } = &step.exec {
+                match ubus.has_access("uci", "wireless", "write").await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return err(
+                            StatusCode::FORBIDDEN,
+                            format!("rpcd ACL denies uci:wireless.write on {}", step.node),
+                        );
+                    }
+                    Err(e) => {
+                        return err(
+                            StatusCode::FORBIDDEN,
+                            format!("could not verify rpcd ACL on {}: {e}", step.node),
+                        );
+                    }
+                }
+            }
         }
         let snap = state.snapshot.read().await;
         for step in &record.status.steps {

@@ -130,6 +130,16 @@ export interface Snapshot {
   health: Health;
 }
 
+export interface NodePermissions {
+  read: boolean;
+  radio_write: boolean;
+  reserve: boolean;
+  whitelist: boolean;
+  kick: boolean;
+  reboot: boolean;
+  wifi_reload: boolean;
+}
+
 // ---- read endpoints ----
 
 export interface DailyUsage { day: string; rx_bytes: number; tx_bytes: number; devices: number }
@@ -171,7 +181,7 @@ export interface DiagResult { output: string; exit_code: number }
 
 export interface LoginRequest { username: string; password: string }
 export interface LoginResponse { user: string }
-export interface MeResponse { user: string; expires: number }
+export interface MeResponse { user: string; expires: number; permissions: Record<string, NodePermissions> }
 
 // ---- actions ----
 

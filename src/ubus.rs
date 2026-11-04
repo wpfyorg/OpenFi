@@ -91,6 +91,24 @@ impl Ubus {
         }
     }
 
+    /// Ask the authenticated rpcd session whether LuCI-style ACL grants this operation.
+    /// Fixture and local CLI transports represent the trusted mock/controller context.
+    pub async fn has_access(&self, scope: &str, object: &str, function: &str) -> Result<bool> {
+        let value = match self {
+            Ubus::Fixture { .. } | Ubus::Cli => return Ok(true),
+            Ubus::Rpcd(r) => {
+                let sid = r.session().await?;
+                r.call(
+                    "session",
+                    "access",
+                    access_args(&sid, scope, object, function),
+                )
+                .await?
+            }
+        };
+        parse_access(&value)
+    }
+
     /// Best-effort `session destroy` on rpcd (logout); a no-op for `Cli`/`Fixture`. Errors are
     /// swallowed by the caller — a session the router already reaped is not a logout failure.
     pub async fn destroy_session(&self) {
@@ -187,6 +205,22 @@ impl Ubus {
             .map(str::to_owned)
             .ok_or_else(|| format!("invalid file.read response for {path}"))
     }
+}
+
+fn parse_access(value: &Value) -> Result<bool> {
+    value
+        .get("access")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "rpcd session.access returned no boolean access result".to_owned())
+}
+
+fn access_args(session_id: &str, scope: &str, object: &str, function: &str) -> Value {
+    json!({
+        "ubus_rpc_session": session_id,
+        "scope": scope,
+        "object": object,
+        "function": function,
+    })
 }
 
 impl Rpcd {
@@ -315,5 +349,31 @@ fn animate(v: &mut Value, t: f64) {
         if let Some(tx) = stats.get_mut("tx_bytes") {
             grow(tx, 2_800_000.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod acl_tests {
+    use super::*;
+
+    #[test]
+    fn session_access_result_is_explicit_and_malformed_results_fail_closed() {
+        assert_eq!(parse_access(&json!({"access": true})), Ok(true));
+        assert_eq!(parse_access(&json!({"access": false})), Ok(false));
+        assert!(parse_access(&json!({})).is_err());
+        assert!(parse_access(&json!({"access": "yes"})).is_err());
+    }
+
+    #[test]
+    fn session_access_request_is_bound_to_the_authenticated_session() {
+        assert_eq!(
+            access_args("session-123", "uci", "wireless", "write"),
+            json!({
+                "ubus_rpc_session": "session-123",
+                "scope": "uci",
+                "object": "wireless",
+                "function": "write",
+            })
+        );
     }
 }
