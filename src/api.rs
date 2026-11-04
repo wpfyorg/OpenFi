@@ -19,7 +19,7 @@ use serde_json::json;
 use tokio_stream::wrappers::WatchStream;
 
 use crate::{
-    AppState, actions, auth, capabilities, collectors, config_history,
+    AppState, actions, advanced_uci, auth, capabilities, collectors, config_history,
     diag::{self, DiagRequest},
     model::RatePoint,
     nodes_api, plan, session, shell, web,
@@ -66,6 +66,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/nodes/{node}/radios/{radio}",
             post(actions::set_radio),
+        )
+        .route(
+            "/api/v1/nodes/{node}/uci/{config}",
+            get(advanced_uci::read_config),
+        )
+        .route(
+            "/api/v1/nodes/{node}/uci/{config}/preview",
+            post(advanced_uci::preview),
+        )
+        .route(
+            "/api/v1/nodes/{node}/uci/{config}/apply",
+            post(advanced_uci::apply),
         )
         // Multi-node WiFi plan
         .route("/api/v1/wifi/networks/{id}/plan", post(plan::create_plan))

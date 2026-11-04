@@ -155,10 +155,34 @@ pub fn mask_secret(_value: &str) -> &'static str {
     "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
 }
 
-/// `uci set <config>.<section>.<option>='<value>'`-style diff line, masking the value when
-/// `option` is one that carries a secret (`key`, `password`).
+/// Whether a UCI option name conventionally carries a credential or private key.
+pub fn is_sensitive_uci_option(option: &str) -> bool {
+    let option = option.to_ascii_lowercase();
+    matches!(
+        option.as_str(),
+        "key"
+            | "password"
+            | "psk"
+            | "private_key"
+            | "auth_token"
+            | "token"
+            | "secret"
+            | "passphrase"
+    ) || [
+        "_password",
+        "_psk",
+        "_private_key",
+        "_auth_token",
+        "_token",
+        "_secret",
+    ]
+    .iter()
+    .any(|suffix| option.ends_with(suffix))
+}
+
+/// `uci set <config>.<section>.<option>='<value>'`-style diff line, masking credentials.
 pub fn mask_uci_line(config: &str, section: &str, option: &str, value: &str) -> String {
-    let shown = if matches!(option, "key" | "password") {
+    let shown = if is_sensitive_uci_option(option) {
         mask_secret(value)
     } else {
         value
@@ -325,5 +349,21 @@ mod tests {
 
         let plain = mask_uci_line("wireless", "default_radio1", "ssid", "MyWiFi");
         assert!(plain.contains("MyWiFi"));
+    }
+
+    #[test]
+    fn masks_common_uci_secret_option_names() {
+        for option in [
+            "key",
+            "password",
+            "psk",
+            "private_key",
+            "auth_token",
+            "wpa_psk",
+        ] {
+            let line = mask_uci_line("wireless", "main", option, "raw-secret");
+            assert!(!line.contains("raw-secret"), "{option}");
+            assert!(line.contains("••••••••"), "{option}");
+        }
     }
 }

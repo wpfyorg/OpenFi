@@ -30,6 +30,7 @@ export const NAV: NavItem[] = [
   { icon: "shield-check", label: "DNS", hash: "#/dns", section: "#EF5F5F" },
   { icon: "sliders-horizontal", label: "QoS", hash: "#/qos", section: "#F0873C" },
   { icon: "settings", label: "Settings", hash: "#/settings/wifi", section: "#3CC4D8" },
+  { icon: "terminal", label: "Advanced UCI", hash: "#/settings/advanced", section: "#3CC4D8" },
 ];
 
 /** Section colour for a hash route that may not be in the sidebar (logs, login). */
