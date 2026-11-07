@@ -208,8 +208,8 @@ before making a router call; rpcd remains the final enforcement point.
 | `POST /nodes/{node}/wifi/reload` | | `network.wireless` reload |
 | `POST /nodes/{node}/radios/{radio}` | `{ disabled?: boolean, channel?: number \| "auto", txpower_dbm?: number }` | `uci set wireless.<radio>.*` → apply with rollback → confirm |
 | `GET /nodes/{node}/uci/{config}` | | Existing UCI section options as `{ node, config, sections: { section: { option: value } } }`; sensitive options are masked, and the mask preserves the current value if sent back unchanged |
-| `POST /nodes/{node}/uci/{config}/preview` | `{ sections: { section: { option: value } } }` | Validated diff for existing sections; option values accept strings, booleans, integers, and scalar lists. Section identity/type/order cannot change. |
-| `POST /nodes/{node}/uci/{config}/apply` | Same as preview | Stages the validated diff, calls `uci apply` with a 30-second rollback window, confirms after a fresh node health check, and audits a secret-masked diff. Disabled in mock mode. |
+| `POST /nodes/{node}/uci/{config}/preview` | `{ base, sections }`, both shaped as `{ section: { option: value } }` | Validated diff for existing sections; `base` is the masked snapshot returned by the preceding GET. Returns `409` if the visible config changed since it was loaded. Option values accept strings, booleans, integers, and scalar lists. Section identity/type/order cannot change. |
+| `POST /nodes/{node}/uci/{config}/apply` | Same as preview | Under the UCI transaction lock, rejects a stale `base` before staging writes, then calls `uci apply` with a 30-second rollback window, confirms after a fresh node health check, and audits a secret-masked diff. Disabled in mock mode. |
 
 Advanced UCI reads/previews require the authenticated rpcd session's `uci:<config>.read` grant;
 apply rechecks both `uci:<config>.read` and `uci:<config>.write`. The packaged non-root admin ACL
