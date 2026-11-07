@@ -127,6 +127,7 @@ struct NodeChange {
     before: BTreeMap<String, Option<serde_json::Value>>,
 }
 
+/// Convert planned wireless updates into masked, structured audit changes.
 fn audit_changes(changes: &[NodeChange]) -> Vec<ConfigChange> {
     changes
         .iter()
@@ -435,6 +436,7 @@ fn gateway_may_confirm(self_reachable: bool, all_aps_reachable: bool) -> bool {
     self_reachable && all_aps_reachable
 }
 
+/// Store one plan action outcome and its structured UCI changes.
 async fn record_audit(
     state: &AppState,
     user: &str,
@@ -478,6 +480,7 @@ async fn set_status(
     }
 }
 
+/// Apply rollout steps in order and confirm each node only while reachability checks pass.
 async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<PlanRecord>>) {
     let steps = record.read().await.steps_exec.clone();
     let mut failed = false;
@@ -523,6 +526,7 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
             }
             Exec::Real { ubus } => safe_apply::run(
                 ubus,
+                &["wireless"],
                 30,
                 settle_delay(),
                 || async {
@@ -640,6 +644,7 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
 // HTTP handlers
 // -------------------------------------------------------------------------------------------
 
+/// Validate a requested network update and return a preview with an opaque plan ID.
 pub async fn create_plan(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<Arc<Session>>,
@@ -770,6 +775,7 @@ pub async fn create_plan(
     .into_response()
 }
 
+/// Start applying a previously created plan, rejecting duplicate or unknown runs.
 pub async fn apply_plan(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<Arc<Session>>,
@@ -779,6 +785,35 @@ pub async fn apply_plan(
         return err(StatusCode::NOT_FOUND, "unknown plan");
     };
 
+    let real_steps = {
+        let record = record_arc.read().await;
+        record
+            .steps_exec
+            .iter()
+            .filter_map(|step| match &step.exec {
+                Exec::Real { ubus } => Some((step.node.clone(), ubus.clone())),
+                Exec::Mock { .. } => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for (node, ubus) in real_steps {
+        match ubus.has_access("uci", "wireless", "write").await {
+            Ok(true) => {}
+            Ok(false) => {
+                return err(
+                    StatusCode::FORBIDDEN,
+                    format!("rpcd ACL denies uci:wireless.write on {node}"),
+                );
+            }
+            Err(e) => {
+                return err(
+                    StatusCode::FORBIDDEN,
+                    format!("could not verify rpcd ACL on {node}: {e}"),
+                );
+            }
+        }
+    }
+
     {
         let mut running = state.plans.running.lock().await;
         if running.is_some() {
@@ -787,25 +822,6 @@ pub async fn apply_plan(
         let mut record = record_arc.write().await;
         if record.started {
             return err(StatusCode::CONFLICT, "plan already applied");
-        }
-        for step in &record.steps_exec {
-            if let Exec::Real { ubus } = &step.exec {
-                match ubus.has_access("uci", "wireless", "write").await {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        return err(
-                            StatusCode::FORBIDDEN,
-                            format!("rpcd ACL denies uci:wireless.write on {}", step.node),
-                        );
-                    }
-                    Err(e) => {
-                        return err(
-                            StatusCode::FORBIDDEN,
-                            format!("could not verify rpcd ACL on {}: {e}", step.node),
-                        );
-                    }
-                }
-            }
         }
         let snap = state.snapshot.read().await;
         for step in &record.status.steps {
@@ -941,6 +957,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks history masks secrets and permits restoration only for scalar public values.
     fn history_masks_secrets_and_marks_only_scalar_public_values_restorable() {
         let changes = vec![NodeChange {
             node: "ap-2".into(),

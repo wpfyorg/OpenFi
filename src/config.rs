@@ -85,6 +85,7 @@ fn default_transport() -> String {
 }
 
 impl Default for Config {
+    /// Build the controller's default node and service configuration.
     fn default() -> Self {
         let node =
             |name: &str, host: &str, transport: &str, wired_uplink: Option<&str>| NodeConfig {

@@ -37,6 +37,7 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Record one action result without structured UCI change details.
 async fn audit(
     state: &AppState,
     session: &Session,
@@ -63,6 +64,7 @@ async fn audit(
         .await;
 }
 
+/// Record an action outcome together with its structured UCI changes.
 async fn audit_config(
     state: &AppState,
     session: &Session,
@@ -132,6 +134,7 @@ fn node_ubus<'a>(
     })
 }
 
+/// Require the caller's rpcd session to grant the requested object method.
 async fn require_acl(
     ubus: &crate::ubus::Ubus,
     scope: &str,
@@ -146,6 +149,7 @@ async fn require_acl(
     )
 }
 
+/// Convert an ACL probe into an authorization result, failing closed on probe errors.
 fn enforce_acl_result(
     result: Result<bool, String>,
     scope: &str,
@@ -161,6 +165,7 @@ fn enforce_acl_result(
     }
 }
 
+/// Format a forbidden response for an ACL denial or failed ACL probe.
 fn acl_denied(message: String) -> Response {
     err(StatusCode::FORBIDDEN, message)
 }
@@ -170,6 +175,7 @@ mod acl_tests {
     use super::*;
 
     #[test]
+    /// Checks denied and unverifiable ACL probes never authorize a write.
     fn denied_or_unverifiable_acl_never_authorizes_a_mutation() {
         assert!(
             enforce_acl_result(Ok(false), "uci", "wireless", "write")
@@ -194,6 +200,7 @@ pub struct KickBody {
     pub ban_secs: Option<u64>,
 }
 
+/// Disconnect an online wireless client through its associated access point.
 pub async fn kick(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -288,6 +295,7 @@ pub struct ReserveBody {
     pub name: String,
 }
 
+/// Create a DHCP host reservation and record the created UCI options.
 pub async fn reserve(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -339,6 +347,7 @@ pub async fn reserve(
             values.insert("name".into(), UciValue::String(body.name.clone()));
             crate::safe_apply::run(
                 ubus,
+                &["dhcp"],
                 30,
                 std::time::Duration::from_secs(3),
                 || async {
@@ -413,6 +422,7 @@ pub struct WhitelistBody {
     pub on: bool,
 }
 
+/// Enable or disable the client's whitelist entry.
 pub async fn whitelist(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -469,6 +479,7 @@ pub async fn whitelist(
 // POST /nodes/{node}/reboot
 // -------------------------------------------------------------------------------------------
 
+/// Reboot a node through the caller's authenticated rpcd session.
 pub async fn reboot(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -505,6 +516,7 @@ pub async fn reboot(
 // POST /nodes/{node}/wifi/reload
 // -------------------------------------------------------------------------------------------
 
+/// Reload the wireless service on a node.
 pub async fn wifi_reload(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -563,6 +575,7 @@ pub enum AutoTag {
     Auto,
 }
 
+/// Update supported settings on one wireless radio and record the resulting values.
 pub async fn set_radio(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -676,6 +689,7 @@ pub async fn set_radio(
         async {
             crate::safe_apply::run(
                 ubus,
+                &["wireless"],
                 30,
                 std::time::Duration::from_secs(3),
                 || async {

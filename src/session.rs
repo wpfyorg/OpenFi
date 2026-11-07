@@ -72,20 +72,31 @@ pub struct NodePermissions {
 }
 
 impl NodePermissions {
+    /// Probe the ACL methods used by node actions and return their individual permissions.
     pub async fn derive(ubus: &Ubus) -> Self {
+        /// Return false when rpcd denies a method or the permission probe fails.
         async fn allowed(ubus: &Ubus, scope: &str, object: &str, function: &str) -> bool {
             ubus.has_access(scope, object, function)
                 .await
                 .unwrap_or(false)
         }
+        let (read, radio_write, reserve, whitelist, kick, reboot, wifi_reload) = tokio::join!(
+            allowed(ubus, "uci", "wireless", "read"),
+            allowed(ubus, "uci", "wireless", "write"),
+            allowed(ubus, "uci", "dhcp", "write"),
+            allowed(ubus, "ubus", "file", "exec"),
+            allowed(ubus, "ubus", "hostapd.*", "del_client"),
+            allowed(ubus, "ubus", "system", "reboot"),
+            allowed(ubus, "ubus", "network.wireless", "reload"),
+        );
         Self {
-            read: allowed(ubus, "uci", "wireless", "read").await,
-            radio_write: allowed(ubus, "uci", "wireless", "write").await,
-            reserve: allowed(ubus, "uci", "dhcp", "write").await,
-            whitelist: allowed(ubus, "ubus", "file", "exec").await,
-            kick: allowed(ubus, "ubus", "hostapd.*", "del_client").await,
-            reboot: allowed(ubus, "ubus", "system", "reboot").await,
-            wifi_reload: allowed(ubus, "ubus", "network.wireless", "reload").await,
+            read,
+            radio_write,
+            reserve,
+            whitelist,
+            kick,
+            reboot,
+            wifi_reload,
         }
     }
 }
@@ -107,6 +118,7 @@ pub struct SessionStore {
 }
 
 impl SessionStore {
+    /// Create a session and cache each authenticated node's action permissions.
     pub async fn create(
         &self,
         user: String,
@@ -300,6 +312,7 @@ mod tests {
     use axum::http::HeaderValue;
 
     #[tokio::test]
+    /// Checks fixture sessions expose the trusted mock permissions for their node.
     async fn fixture_session_exposes_mock_permissions() {
         let store = SessionStore::default();
         let node_ubus = HashMap::from([(
