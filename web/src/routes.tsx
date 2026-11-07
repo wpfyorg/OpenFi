@@ -24,6 +24,7 @@ export const ROUTES: Route[] = [
   { hash: "#/qos", title: "QoS", subtitle: "Fair use tiers", section: sectionForHash("#/qos"), load: () => import("./pages/Qos") },
   { hash: "#/settings/wifi", title: "Settings", subtitle: "WiFi networks", section: sectionForHash("#/settings/wifi"), load: () => import("./pages/SettingsWifi") },
   { hash: "#/settings/nodes", title: "Settings", subtitle: "Controller nodes", section: sectionForHash("#/settings/nodes"), load: () => import("./pages/SettingsNodes") },
+  { hash: "#/settings/advanced", title: "Settings", subtitle: "Advanced UCI editor", section: sectionForHash("#/settings/advanced"), load: () => import("./pages/SettingsAdvanced") },
   { hash: "#/logs", title: "Logs", subtitle: "logread, per node", section: sectionForHash("#/logs"), load: () => import("./pages/Logs") },
   { hash: "#/login", title: "Sign in", subtitle: "", section: sectionForHash("#/login"), load: () => import("./pages/Login") },
 ];

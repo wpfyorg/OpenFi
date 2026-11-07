@@ -129,7 +129,7 @@ interface RoamingEdit extends WifiRoaming {}
 function cloneRoaming(r: WifiRoaming): RoamingEdit { return { ...r }; }
 
 function NetworkEditor({ network, onApplied }: { network: WifiNetwork; onApplied: () => void }) {
-  const { snap } = useSnap();
+  const { snap, permissions } = useSnap();
   const [ssid, setSsid] = useState(network.ssid);
   const [key, setKey] = useState("");
   const [revealKey, setRevealKey] = useState(false);
@@ -159,6 +159,7 @@ function NetworkEditor({ network, onApplied }: { network: WifiNetwork; onApplied
   }, [planStatus?.state]);
 
   const nodeOrder = snap?.nodes.map((n) => n.name).filter((n) => n in network.broadcast) ?? Object.keys(network.broadcast);
+  const canEdit = nodeOrder.length > 0 && nodeOrder.every((node) => permissions[node]?.read === true && permissions[node]?.radio_write === true);
 
   const ssidChanged = ssid !== network.ssid;
   const keyChanged = key.length > 0;
@@ -219,17 +220,19 @@ function NetworkEditor({ network, onApplied }: { network: WifiNetwork; onApplied
         <Empty icon="lock" title="System-managed" hint="The mesh backhaul network is configured automatically and can't be edited here." />
       ) : (
         <>
+          {!canEdit && <p class="muted small">Editing disabled: rpcd ACL must allow wireless read and write on every target node.</p>}
           <details class="wifi-section" open>
             <summary>Basics</summary>
             <div class="field">
               <label for="wifi-ssid">Network name</label>
-              <input id="wifi-ssid" value={ssid} onInput={(e) => setSsid((e.target as HTMLInputElement).value)} />
+              <input id="wifi-ssid" value={ssid} disabled={!canEdit} onInput={(e) => setSsid((e.target as HTMLInputElement).value)} />
             </div>
             <div class="field">
               <label for="wifi-key">Password</label>
               <div class="password-field">
                 <input
                   id="wifi-key" type={revealKey ? "text" : "password"} value={key}
+                  disabled={!canEdit}
                   onInput={(e) => setKey((e.target as HTMLInputElement).value)}
                   placeholder="Leave blank to keep the current password"
                 />
@@ -240,7 +243,7 @@ function NetworkEditor({ network, onApplied }: { network: WifiNetwork; onApplied
             </div>
             <div class="field">
               <label for="wifi-security">Security</label>
-              <select id="wifi-security" value={security} onChange={(e) => setSecurity((e.target as HTMLSelectElement).value as WifiSecurity)}>
+              <select id="wifi-security" value={security} disabled={!canEdit} onChange={(e) => setSecurity((e.target as HTMLSelectElement).value as WifiSecurity)}>
                 {(Object.keys(SECURITY_LABEL) as WifiSecurity[]).map((s) => <option value={s} key={s}>{SECURITY_LABEL[s]}</option>)}
               </select>
             </div>
@@ -248,12 +251,12 @@ function NetworkEditor({ network, onApplied }: { network: WifiNetwork; onApplied
 
           <details class="wifi-section" open>
             <summary>Where it broadcasts</summary>
-            <BroadcastMatrix nodeOrder={nodeOrder} broadcast={broadcast} onChange={setBroadcast} />
+            <BroadcastMatrix nodeOrder={nodeOrder} broadcast={broadcast} onChange={setBroadcast} canEdit={canEdit} />
           </details>
 
           <details class="wifi-section">
             <summary>Roaming</summary>
-            <RoamingFields roaming={roaming} onChange={setRoaming} />
+            <RoamingFields roaming={roaming} onChange={setRoaming} canEdit={canEdit} />
           </details>
 
           <details class="wifi-section" open>
@@ -262,7 +265,7 @@ function NetworkEditor({ network, onApplied }: { network: WifiNetwork; onApplied
               {!hasChanges && <p class="muted small">No changes yet. Edit the fields above, then review.</p>}
               <div class="review-actions">
                 <Button onClick={resetChanges} disabled={!hasChanges && !plan}>Cancel</Button>
-                <Button primary onClick={review} disabled={!hasChanges || planning}>{planning ? "Building plan…" : "Review changes"}</Button>
+                <Button primary onClick={review} disabled={!canEdit || !hasChanges || planning}>{planning ? "Building plan…" : "Review changes"}</Button>
               </div>
               {planError && <p class="field-error">{planError}</p>}
               {plan && (
@@ -274,7 +277,7 @@ function NetworkEditor({ network, onApplied }: { network: WifiNetwork; onApplied
                   <div class="review-actions">
                     <Button
                       primary icon="refresh-cw"
-                      disabled={!canApply || applying || planStatus?.state === "running"}
+                      disabled={!canEdit || !canApply || applying || planStatus?.state === "running"}
                       onClick={() => setConfirmOpen(true)}
                     >
                       {planStatus?.state === "running" ? "Applying…" : `Apply to ${plan.order.length} node${plan.order.length === 1 ? "" : "s"}`}
@@ -334,8 +337,8 @@ function diffRoaming(original: WifiRoaming, edited: WifiRoaming): Partial<WifiRo
 }
 
 function BroadcastMatrix({
-  nodeOrder, broadcast, onChange,
-}: { nodeOrder: string[]; broadcast: WifiNetwork["broadcast"]; onChange: (b: WifiNetwork["broadcast"]) => void }) {
+  nodeOrder, broadcast, onChange, canEdit,
+}: { nodeOrder: string[]; broadcast: WifiNetwork["broadcast"]; onChange: (b: WifiNetwork["broadcast"]) => void; canEdit: boolean }) {
   function flip(node: string, band: Band) {
     const cur = broadcast[node]?.[band];
     if (cur == null) return;
@@ -352,8 +355,8 @@ function BroadcastMatrix({
         return (
           <div class="bc-row" key={node}>
             <NodeTag node={node} size={12} />
-            <Toggle checked={!!bc["2.4"]} disabled={bc["2.4"] == null} onChange={() => flip(node, "2.4")} />
-            <Toggle checked={!!bc["5"]} disabled={bc["5"] == null} onChange={() => flip(node, "5")} />
+            <Toggle checked={!!bc["2.4"]} disabled={!canEdit || bc["2.4"] == null} onChange={() => flip(node, "2.4")} />
+            <Toggle checked={!!bc["5"]} disabled={!canEdit || bc["5"] == null} onChange={() => flip(node, "5")} />
           </div>
         );
       })}
@@ -364,7 +367,7 @@ function BroadcastMatrix({
   );
 }
 
-function RoamingFields({ roaming, onChange }: { roaming: RoamingEdit; onChange: (r: RoamingEdit) => void }) {
+function RoamingFields({ roaming, onChange, canEdit }: { roaming: RoamingEdit; onChange: (r: RoamingEdit) => void; canEdit: boolean }) {
   const kv = roaming.rrm && roaming.btm;
   return (
     <div class="roaming-fields">
@@ -373,12 +376,12 @@ function RoamingFields({ roaming, onChange }: { roaming: RoamingEdit; onChange: 
           <span class="switch-title">802.11r FT-over-DS</span>
           <span class="muted small">Fast, seamless roam between nodes</span>
         </div>
-        <Toggle checked={roaming.ft_over_ds} onChange={(v) => onChange({ ...roaming, ft: v || roaming.ft, ft_over_ds: v })} />
+        <Toggle checked={roaming.ft_over_ds} disabled={!canEdit} onChange={(v) => onChange({ ...roaming, ft: v || roaming.ft, ft_over_ds: v })} />
       </label>
       <div class="field">
         <label for="wifi-mobility-domain">Mobility domain</label>
         <input
-          id="wifi-mobility-domain" class="mono" value={roaming.mobility_domain ?? ""} disabled={!roaming.ft_over_ds}
+          id="wifi-mobility-domain" class="mono" value={roaming.mobility_domain ?? ""} disabled={!canEdit || !roaming.ft_over_ds}
           onInput={(e) => onChange({ ...roaming, mobility_domain: (e.target as HTMLInputElement).value || null })}
           placeholder="e.g. 2c3c" maxLength={4}
         />
@@ -388,11 +391,11 @@ function RoamingFields({ roaming, onChange }: { roaming: RoamingEdit; onChange: 
           <span class="switch-title">802.11k/v neighbor reports</span>
           <span class="muted small">Helps clients pick the best node before roaming</span>
         </div>
-        <Toggle checked={kv} onChange={(v) => onChange({ ...roaming, rrm: v, btm: v })} />
+        <Toggle checked={kv} disabled={!canEdit} onChange={(v) => onChange({ ...roaming, rrm: v, btm: v })} />
       </label>
       <div class="field">
         <label for="wifi-pmf">802.11w (PMF)</label>
-        <select id="wifi-pmf" value={roaming.pmf} onChange={(e) => onChange({ ...roaming, pmf: (e.target as HTMLSelectElement).value as Pmf })}>
+        <select id="wifi-pmf" value={roaming.pmf} disabled={!canEdit} onChange={(e) => onChange({ ...roaming, pmf: (e.target as HTMLSelectElement).value as Pmf })}>
           <option value="off">Off</option>
           <option value="optional">Optional</option>
           <option value="required">Required</option>
@@ -403,7 +406,7 @@ function RoamingFields({ roaming, onChange }: { roaming: RoamingEdit; onChange: 
           <span class="switch-title">usteer band steering</span>
           <span class="muted small">Nudges clients to the strongest node and band</span>
         </div>
-        <Toggle checked={roaming.usteer} onChange={(v) => onChange({ ...roaming, usteer: v })} />
+        <Toggle checked={roaming.usteer} disabled={!canEdit} onChange={(v) => onChange({ ...roaming, usteer: v })} />
       </label>
     </div>
   );
