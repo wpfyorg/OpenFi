@@ -20,9 +20,14 @@ use crate::{
     uci_engine::{self, Section, UciScalar, UciValue},
 };
 
+type ConfigSnapshot = BTreeMap<String, BTreeMap<String, Value>>;
+
+const STALE_CONFIG_MESSAGE: &str = "configuration changed since it was loaded; reload and retry";
+
 #[derive(Debug, Deserialize)]
 pub struct EditRequest {
-    pub sections: BTreeMap<String, BTreeMap<String, Value>>,
+    pub base: ConfigSnapshot,
+    pub sections: ConfigSnapshot,
 }
 
 fn err(status: StatusCode, message: impl Into<String>) -> Response {
@@ -132,28 +137,6 @@ fn diff(
     Ok(changes)
 }
 
-/// Reject edits when any targeted option changed since the caller read the config.
-fn validate_current_values(
-    expected: &[Section],
-    current: &[Section],
-    changes: &[(String, String, Option<UciValue>)],
-) -> Result<(), String> {
-    for (section, option, _) in changes {
-        let expected_value = expected
-            .iter()
-            .find(|item| item.name == *section)
-            .and_then(|item| item.options.get(option));
-        let current_value = current
-            .iter()
-            .find(|item| item.name == *section)
-            .and_then(|item| item.options.get(option));
-        if current_value != expected_value {
-            return Err("configuration changed since it was read; reload and retry".into());
-        }
-    }
-    Ok(())
-}
-
 /// Replace values for sensitive options with the fixed audit mask.
 fn redacted_options(options: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
     options
@@ -167,6 +150,37 @@ fn redacted_options(options: &BTreeMap<String, Value>) -> BTreeMap<String, Value
             (key.clone(), shown)
         })
         .collect()
+}
+
+/// Convert live UCI sections into the same secret-masked snapshot returned to clients.
+fn redacted_snapshot(sections: &[Section]) -> ConfigSnapshot {
+    sections
+        .iter()
+        .map(|section| (section.name.clone(), redacted_options(&section.options)))
+        .collect()
+}
+
+/// Rebuild the option-only section view needed to diff a client base snapshot.
+fn snapshot_sections(snapshot: &ConfigSnapshot) -> Vec<Section> {
+    snapshot
+        .iter()
+        .map(|(name, options)| Section {
+            name: name.clone(),
+            kind: String::new(),
+            anonymous: false,
+            index: None,
+            options: options.clone(),
+        })
+        .collect()
+}
+
+/// Reject a request if the live config no longer matches the client's loaded snapshot.
+fn validate_base_snapshot(current: &[Section], base: &ConfigSnapshot) -> Result<(), String> {
+    if redacted_snapshot(current) == *base {
+        Ok(())
+    } else {
+        Err(STALE_CONFIG_MESSAGE.into())
+    }
 }
 
 /// Remove submitted secret values from an error string before returning it to the client.
@@ -308,10 +322,7 @@ pub async fn read_config(
     }
     match uci_engine::read(ubus, &config).await {
         Ok(sections) => {
-            let safe_sections: BTreeMap<_, _> = sections
-                .iter()
-                .map(|section| (section.name.clone(), redacted_options(&section.options)))
-                .collect();
+            let safe_sections = redacted_snapshot(&sections);
             Json(json!({"node": node, "config": config, "sections": safe_sections})).into_response()
         }
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -336,6 +347,9 @@ pub async fn preview(
         Ok(s) => s,
         Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()),
     };
+    if let Err(message) = validate_base_snapshot(&sections, &body.base) {
+        return err(StatusCode::CONFLICT, message);
+    }
     match diff(&sections, &body.sections) {
         Ok(changes) => Json(
             json!({"node": node, "config": config, "changes": display_diff(&config, &changes)}),
@@ -368,11 +382,8 @@ pub async fn apply(
             "advanced UCI editing is disabled in mock mode",
         );
     }
-    let sections = match uci_engine::read(ubus, &config).await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()),
-    };
-    let changes = match diff(&sections, &body.sections) {
+    let base_sections = snapshot_sections(&body.base);
+    let changes = match diff(&base_sections, &body.sections) {
         Ok(c) => c,
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
@@ -380,7 +391,7 @@ pub async fn apply(
         return err(StatusCode::BAD_REQUEST, "no UCI changes to apply");
     }
     let lines = display_diff(&config, &changes);
-    let config_changes = history_changes(&node, &config, &sections, &changes);
+    let config_changes = history_changes(&node, &config, &base_sections, &changes);
     let target = format!("{node}:{config}");
     let result = safe_apply::run(
         ubus,
@@ -391,7 +402,7 @@ pub async fn apply(
             let current = uci_engine::read(ubus, &config)
                 .await
                 .map_err(|e| e.to_string())?;
-            validate_current_values(&sections, &current, &changes)?;
+            validate_base_snapshot(&current, &body.base)?;
             for (section, option, value) in &changes {
                 match value {
                     Some(value) => uci_engine::update(
@@ -427,6 +438,14 @@ pub async fn apply(
             Json(json!({"ok": true, "changes": lines})).into_response()
         }
         Err(e) => {
+            let status = if matches!(
+                &e,
+                safe_apply::Error::Stage(message) if message == STALE_CONFIG_MESSAGE
+            ) {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
             let safe_error = scrub_sensitive_values(&e.to_string(), &changes);
             record(
                 &state,
@@ -437,7 +456,7 @@ pub async fn apply(
                 config_changes,
             )
             .await;
-            err(StatusCode::BAD_GATEWAY, safe_error)
+            err(status, safe_error)
         }
     }
 }
@@ -492,27 +511,27 @@ mod tests {
     }
 
     #[test]
-    /// Checks stale targeted values are rejected before the editor stages writes.
-    fn stale_changed_option_is_rejected_before_staging() {
-        let expected = vec![section(json!({"enabled":"0", "description":"old"}))];
-        let changed = vec![
-            ("main".into(), "enabled".into(), Some(UciValue::Bool(true))),
-            ("main".into(), "description".into(), None),
-        ];
+    /// Checks any visible config change since load invalidates the client base snapshot.
+    fn stale_base_snapshot_is_rejected_before_staging() {
+        let loaded = vec![section(json!({
+            "enabled":"0",
+            "description":"old",
+            "psk":"secret"
+        }))];
+        let base = redacted_snapshot(&loaded);
 
+        assert!(validate_base_snapshot(&loaded, &base).is_ok());
         assert!(
-            validate_current_values(
-                &expected,
-                &[section(json!({"enabled":"1", "description":"old"}))],
-                &changed,
+            validate_base_snapshot(
+                &[section(json!({
+                    "enabled":"0",
+                    "description":"changed elsewhere",
+                    "psk":"secret"
+                }))],
+                &base,
             )
             .is_err()
         );
-        assert!(
-            validate_current_values(&expected, &[section(json!({"enabled":"0"}))], &changed,)
-                .is_err()
-        );
-        assert!(validate_current_values(&expected, &expected, &changed).is_ok());
     }
 
     #[test]
@@ -613,6 +632,7 @@ mod tests {
             Extension(session),
             Path((node.clone(), "system".into())),
             Json(EditRequest {
+                base: BTreeMap::new(),
                 sections: BTreeMap::new(),
             }),
         )
@@ -634,6 +654,7 @@ mod tests {
             Extension(session),
             Path((node, "system".into())),
             Json(EditRequest {
+                base: BTreeMap::new(),
                 sections: BTreeMap::new(),
             }),
         )
