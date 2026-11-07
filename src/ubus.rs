@@ -207,6 +207,7 @@ impl Ubus {
     }
 }
 
+/// Parse rpcd's boolean `session.access` response, rejecting missing or malformed results.
 fn parse_access(value: &Value) -> Result<bool> {
     value
         .get("access")
@@ -214,6 +215,7 @@ fn parse_access(value: &Value) -> Result<bool> {
         .ok_or_else(|| "rpcd session.access returned no boolean access result".to_owned())
 }
 
+/// Build the session-bound arguments for an rpcd `session.access` request.
 fn access_args(session_id: &str, scope: &str, object: &str, function: &str) -> Value {
     json!({
         "ubus_rpc_session": session_id,
@@ -357,6 +359,7 @@ mod acl_tests {
     use super::*;
 
     #[test]
+    /// Checks explicit access results and fail-closed parsing of malformed replies.
     fn session_access_result_is_explicit_and_malformed_results_fail_closed() {
         assert_eq!(parse_access(&json!({"access": true})), Ok(true));
         assert_eq!(parse_access(&json!({"access": false})), Ok(false));
@@ -365,6 +368,7 @@ mod acl_tests {
     }
 
     #[test]
+    /// Checks access requests carry the authenticated session identifier and target method.
     fn session_access_request_is_bound_to_the_authenticated_session() {
         assert_eq!(
             access_args("session-123", "uci", "wireless", "write"),

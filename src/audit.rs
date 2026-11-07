@@ -60,12 +60,14 @@ pub struct Audit {
 }
 
 impl Default for Audit {
+    /// Create the audit log with its persistent router path.
     fn default() -> Self {
         Self::new("/etc/openwrtfi/audit.jsonl".into())
     }
 }
 
 impl Audit {
+    /// Load existing audit rows and initialize storage for the supplied log path.
     pub fn new(log_path: std::path::PathBuf) -> Self {
         Self {
             entries: Mutex::new(load_entries(&log_path)),
@@ -75,6 +77,7 @@ impl Audit {
         }
     }
 
+    /// Add an entry to the in-memory history and append it to the disk log.
     pub async fn record(&self, mut entry: AuditEntry) {
         if entry.id.is_empty() {
             let nanos = std::time::SystemTime::now()
@@ -155,13 +158,18 @@ pub fn mask_secret(_value: &str) -> &'static str {
     "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
 }
 
-/// Whether a UCI option name conventionally carries a credential or private key.
+/// Return whether a UCI option name matches the credential-name rules.
 pub fn is_sensitive_uci_option(option: &str) -> bool {
     let option = option.to_ascii_lowercase();
     matches!(
         option.as_str(),
         "key"
             | "password"
+            | "preshared_key"
+            | "key1"
+            | "key2"
+            | "key3"
+            | "key4"
             | "psk"
             | "private_key"
             | "auth_token"
@@ -352,10 +360,16 @@ mod tests {
     }
 
     #[test]
+    /// Checks that common UCI credential option names are classified as sensitive.
     fn masks_common_uci_secret_option_names() {
         for option in [
             "key",
             "password",
+            "preshared_key",
+            "key1",
+            "key2",
+            "key3",
+            "key4",
             "psk",
             "private_key",
             "auth_token",
@@ -364,6 +378,17 @@ mod tests {
             let line = mask_uci_line("wireless", "main", option, "raw-secret");
             assert!(!line.contains("raw-secret"), "{option}");
             assert!(line.contains("••••••••"), "{option}");
+        }
+    }
+
+    #[test]
+    /// Checks case-insensitive exact and suffix matching for sensitive option names.
+    fn sensitive_uci_option_names_are_matched_exactly_case_insensitively() {
+        for option in ["PRESHARED_KEY", "KEY1", "KEY2", "KEY3", "KEY4"] {
+            assert!(is_sensitive_uci_option(option), "{option}");
+        }
+        for option in ["key0", "key5", "preshared_key_backup"] {
+            assert!(!is_sensitive_uci_option(option), "{option}");
         }
     }
 }

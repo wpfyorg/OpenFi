@@ -92,6 +92,7 @@ impl ShellTokens {
     }
 }
 
+/// Record a successful shell action in the audit history.
 async fn audit(state: &AppState, user: &str, action: &str, node: &str, detail: &str) {
     state
         .audit

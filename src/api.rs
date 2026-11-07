@@ -219,19 +219,15 @@ async fn usage_daily(State(s): State<Arc<AppState>>, Query(q): Query<UsageDailyQ
     Json(rows).into_response()
 }
 
+/// Return wireless networks from nodes the caller may read.
 async fn wifi_networks(
     State(s): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<session::Session>>,
 ) -> Response {
+    let mut nodes = Vec::with_capacity(s.nodes.len());
     for (node, _) in &s.nodes {
         let Some(ubus) = session.node_ubus.get(&node.name) else {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(
-                    json!({ "error": format!("no authenticated rpcd session for {}", node.name) }),
-                ),
-            )
-                .into_response();
+            continue;
         };
         match ubus.has_access("uci", "wireless", "read").await {
             Ok(true) => {}
@@ -250,21 +246,57 @@ async fn wifi_networks(
                     .into_response();
             }
         }
+        nodes.push((node.clone(), ubus.clone()));
     }
     let clients = s.snapshot.read().await.clients.clone();
-    Json(collectors::wifi_networks::collect(&s.nodes, &clients).await).into_response()
+    Json(collectors::wifi_networks::collect(&nodes, &clients).await).into_response()
 }
 
-async fn node_capabilities(State(s): State<Arc<AppState>>, Path(node): Path<String>) -> Response {
-    let Some((config, ubus)) = s.nodes.iter().find(|(config, _)| config.name == node) else {
+/// Report the actions and services detected on one authenticated node.
+async fn node_capabilities(
+    State(s): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<Arc<session::Session>>,
+    Path(node): Path<String>,
+) -> Response {
+    let Some((config, _)) = s.nodes.iter().find(|(config, _)| config.name == node) else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": format!("unknown node {node:?}")})),
         )
             .into_response();
     };
-    Json(capabilities::discover(ubus, config.transport == "local", s.config.shell.enabled).await)
-        .into_response()
+    let Some(ubus) = session.node_ubus.get(&node) else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": format!("no authenticated rpcd session for {node}") })),
+        )
+            .into_response();
+    };
+    match ubus.has_access("uci", "wireless", "read").await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": format!("rpcd ACL denies uci:wireless.read on {node}") })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": format!("could not verify rpcd ACL on {node}: {e}") })),
+            )
+                .into_response();
+        }
+    }
+    match capabilities::discover(ubus, config.transport == "local", s.config.shell.enabled).await {
+        Ok(capabilities) => Json(capabilities).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("capability discovery failed: {error}") })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Deserialize)]

@@ -29,6 +29,7 @@ fn err(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({"error": message.into()}))).into_response()
 }
 
+/// Check whether the caller's rpcd session may invoke a UCI method for this config.
 async fn require_uci_acl(
     ubus: &crate::ubus::Ubus,
     config: &str,
@@ -44,6 +45,7 @@ async fn require_uci_acl(
 }
 
 #[allow(clippy::result_large_err)]
+/// Resolve a writable node handle, rejecting read-only or unknown nodes.
 fn node_handle<'a>(
     state: &AppState,
     session: &'a Session,
@@ -67,6 +69,7 @@ fn node_handle<'a>(
     })
 }
 
+/// Convert a JSON scalar or scalar list into the corresponding UCI value.
 fn to_uci(value: &Value) -> Result<UciValue, String> {
     match value {
         Value::String(v) => Ok(UciValue::String(v.clone())),
@@ -92,6 +95,7 @@ fn to_uci(value: &Value) -> Result<UciValue, String> {
     }
 }
 
+/// Validate a complete section snapshot and produce only changed UCI options.
 fn diff(
     sections: &[Section],
     requested: &BTreeMap<String, BTreeMap<String, Value>>,
@@ -128,6 +132,29 @@ fn diff(
     Ok(changes)
 }
 
+/// Reject edits when any targeted option changed since the caller read the config.
+fn validate_current_values(
+    expected: &[Section],
+    current: &[Section],
+    changes: &[(String, String, Option<UciValue>)],
+) -> Result<(), String> {
+    for (section, option, _) in changes {
+        let expected_value = expected
+            .iter()
+            .find(|item| item.name == *section)
+            .and_then(|item| item.options.get(option));
+        let current_value = current
+            .iter()
+            .find(|item| item.name == *section)
+            .and_then(|item| item.options.get(option));
+        if current_value != expected_value {
+            return Err("configuration changed since it was read; reload and retry".into());
+        }
+    }
+    Ok(())
+}
+
+/// Replace values for sensitive options with the fixed audit mask.
 fn redacted_options(options: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
     options
         .iter()
@@ -142,6 +169,7 @@ fn redacted_options(options: &BTreeMap<String, Value>) -> BTreeMap<String, Value
         .collect()
 }
 
+/// Remove submitted secret values from an error string before returning it to the client.
 fn scrub_sensitive_values(message: &str, changes: &[(String, String, Option<UciValue>)]) -> String {
     let mut secrets = Vec::new();
     for (_, option, value) in changes {
@@ -170,6 +198,7 @@ fn scrub_sensitive_values(message: &str, changes: &[(String, String, Option<UciV
         })
 }
 
+/// Render changed options as readable lines while masking sensitive values.
 fn display_diff(config: &str, changes: &[(String, String, Option<UciValue>)]) -> Vec<String> {
     changes
         .iter()
@@ -183,6 +212,7 @@ fn display_diff(config: &str, changes: &[(String, String, Option<UciValue>)]) ->
         .collect()
 }
 
+/// Build secret-masked history records and mark only supported scalar changes restorable.
 fn history_changes(
     node: &str,
     config: &str,
@@ -232,6 +262,7 @@ fn history_changes(
         .collect()
 }
 
+/// Store one advanced-editor result and its structured configuration changes.
 async fn record(
     state: &AppState,
     session: &Session,
@@ -262,6 +293,7 @@ async fn record(
         .await;
 }
 
+/// Read a node's UCI config, returning sensitive options in masked form.
 pub async fn read_config(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<Arc<Session>>,
@@ -286,6 +318,7 @@ pub async fn read_config(
     }
 }
 
+/// Preview the option changes requested for a node's UCI config.
 pub async fn preview(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<Arc<Session>>,
@@ -312,6 +345,7 @@ pub async fn preview(
     }
 }
 
+/// Apply validated UCI changes with rpcd rollback and audit the result.
 pub async fn apply(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<Arc<Session>>,
@@ -350,9 +384,14 @@ pub async fn apply(
     let target = format!("{node}:{config}");
     let result = safe_apply::run(
         ubus,
+        &[config.as_str()],
         30,
         Duration::from_secs(3),
         || async {
+            let current = uci_engine::read(ubus, &config)
+                .await
+                .map_err(|e| e.to_string())?;
+            validate_current_values(&sections, &current, &changes)?;
             for (section, option, value) in &changes {
                 match value {
                     Some(value) => uci_engine::update(
@@ -408,6 +447,7 @@ mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
 
+    /// Build a named wireless section from a JSON option object for editor tests.
     fn section(options: serde_json::Value) -> Section {
         Section {
             name: "main".into(),
@@ -424,6 +464,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks fixed section names and supported scalar/list UCI values.
     fn diff_validates_fixed_sections_and_supported_uci_values() {
         let current = vec![section(json!({"enabled":"0", "hosts":["lan", "guest"]}))];
         let target = BTreeMap::from([(
@@ -451,6 +492,31 @@ mod tests {
     }
 
     #[test]
+    /// Checks stale targeted values are rejected before the editor stages writes.
+    fn stale_changed_option_is_rejected_before_staging() {
+        let expected = vec![section(json!({"enabled":"0", "description":"old"}))];
+        let changed = vec![
+            ("main".into(), "enabled".into(), Some(UciValue::Bool(true))),
+            ("main".into(), "description".into(), None),
+        ];
+
+        assert!(
+            validate_current_values(
+                &expected,
+                &[section(json!({"enabled":"1", "description":"old"}))],
+                &changed,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_current_values(&expected, &[section(json!({"enabled":"0"}))], &changed,)
+                .is_err()
+        );
+        assert!(validate_current_values(&expected, &expected, &changed).is_ok());
+    }
+
+    #[test]
+    /// Checks preview and audit output mask secret values.
     fn secret_values_are_masked_in_preview_and_audit_diff() {
         for option in ["key", "password", "psk", "private_key", "auth_token"] {
             let changes = vec![(
@@ -465,6 +531,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks reads redact secrets and an unchanged mask is treated as unchanged input.
     fn read_redacts_secret_options_and_mask_round_trips_as_unchanged() {
         let options = BTreeMap::from([
             ("psk".into(), json!("raw-secret")),
@@ -485,6 +552,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks UCI errors do not return submitted secret values.
     fn staged_errors_scrub_submitted_secret_values() {
         let changes = vec![(
             "main".into(),
@@ -496,6 +564,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks history masks secrets and limits restoration to supported scalar changes.
     fn history_masks_secrets_and_only_marks_scalar_changes_restorable() {
         let current = vec![section(json!({
             "ssid":"old",
@@ -526,6 +595,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Checks read-only sessions and mock mode cannot apply advanced UCI edits.
     async fn refuses_read_only_sessions_and_mock_mode_apply() {
         let state = crate::test_support::minimal_app_state();
         let node = state.nodes[0].0.name.clone();
@@ -572,6 +642,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Checks a config read response contains redacted sensitive option values.
     async fn config_read_response_redacts_sensitive_values() {
         let state = crate::test_support::minimal_app_state();
         let (node_config, handle) = &state.nodes[0];

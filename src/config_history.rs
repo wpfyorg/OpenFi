@@ -29,6 +29,7 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({"error": message.into()}))).into_response()
 }
 
+/// Check whether every change in an audit entry can be safely restored.
 fn restorable(entry: &AuditEntry) -> bool {
     let section_restore = entry.config_changes.iter().any(|c| c.restore_section);
     !entry.config_changes.is_empty()
@@ -48,6 +49,7 @@ fn restorable(entry: &AuditEntry) -> bool {
             == 1
 }
 
+/// Confirm a created section still contains exactly the values recorded in history.
 fn created_section_matches(changes: &[ConfigChange], sections: &[uci_engine::Section]) -> bool {
     let Some(first) = changes.first() else {
         return false;
@@ -82,10 +84,12 @@ fn created_section_matches(changes: &[ConfigChange], sections: &[uci_engine::Sec
         })
 }
 
+/// Compare a current option value with the post-change value stored in history.
 fn matches_after(current: Option<String>, expected: &Option<String>) -> bool {
     &current == expected
 }
 
+/// Add a success or failure entry for a configuration restore attempt.
 async fn record_restore_result(
     state: &AppState,
     session: &Session,
@@ -108,6 +112,7 @@ async fn record_restore_result(
         .await;
 }
 
+/// Return audit entries that contain structured configuration changes.
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<Vec<AuditEntry>> {
     Json(
         state
@@ -174,8 +179,8 @@ pub async fn restore(
         .config_changes
         .iter()
         .map(|change| change.config.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    for config in configs {
+        .collect::<std::collections::BTreeSet<_>>();
+    for config in &configs {
         for function in ["read", "write"] {
             match ubus.has_access("uci", config, function).await {
                 Ok(true) => {}
@@ -194,46 +199,55 @@ pub async fn restore(
             }
         }
     }
-
-    if entry.config_changes[0].restore_section {
-        let Ok(sections) = uci_engine::read(ubus, &entry.config_changes[0].config).await else {
-            return error(StatusCode::BAD_GATEWAY, "could not read current UCI state");
-        };
-        if !created_section_matches(&entry.config_changes, &sections) {
-            return error(
-                StatusCode::CONFLICT,
-                "created section changed since this history entry",
-            );
-        }
-    }
-
-    // Preflight all values before changing staged UCI state.
-    for diff in &entry.config_changes {
-        let Ok(sections) = uci_engine::read(ubus, &diff.config).await else {
-            return error(StatusCode::BAD_GATEWAY, "could not read current UCI state");
-        };
-        let current = sections
-            .iter()
-            .find(|s| s.name == diff.section)
-            .and_then(|s| s.options.get(&diff.option))
-            .map(|v| {
-                v.as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| v.to_string())
-            });
-        if !matches_after(current, &diff.after) {
-            return error(
-                StatusCode::CONFLICT,
-                format!("{} changed since this history entry", diff.option),
-            );
-        }
-    }
+    let staged_configs = configs.iter().copied().collect::<Vec<_>>();
 
     let result = safe_apply::run(
         ubus,
+        &staged_configs,
         30,
         Duration::from_secs(3),
         || async {
+            // Validate against one locked snapshot per config. Keep these reads inside `run` so
+            // no other UCI transaction can change state between validation and staging.
+            let mut configs = BTreeMap::new();
+            for diff in &entry.config_changes {
+                if !configs.contains_key(&diff.config) {
+                    let sections = uci_engine::read(ubus, &diff.config)
+                        .await
+                        .map_err(|_| "__restore_read_error__".to_owned())?;
+                    configs.insert(diff.config.clone(), sections);
+                }
+            }
+
+            if entry.config_changes[0].restore_section {
+                let sections = &configs[&entry.config_changes[0].config];
+                if !created_section_matches(&entry.config_changes, sections) {
+                    return Err(
+                        "__restore_conflict__:created section changed since this history entry"
+                            .to_owned(),
+                    );
+                }
+            }
+
+            for diff in &entry.config_changes {
+                let sections = &configs[&diff.config];
+                let current = sections
+                    .iter()
+                    .find(|s| s.name == diff.section)
+                    .and_then(|s| s.options.get(&diff.option))
+                    .map(|v| {
+                        v.as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| v.to_string())
+                    });
+                if !matches_after(current, &diff.after) {
+                    return Err(format!(
+                        "__restore_conflict__:{} changed since this history entry",
+                        diff.option
+                    ));
+                }
+            }
+
             for diff in &entry.config_changes {
                 if diff.restore_section {
                     continue;
@@ -261,6 +275,14 @@ pub async fn restore(
         || async { safe_apply::board_reachable(ubus).await },
     )
     .await;
+    if let Err(safe_apply::Error::Stage(stage_error)) = &result {
+        if stage_error == "__restore_read_error__" {
+            return error(StatusCode::BAD_GATEWAY, "could not read current UCI state");
+        }
+        if let Some(message) = stage_error.strip_prefix("__restore_conflict__:") {
+            return error(StatusCode::CONFLICT, message);
+        }
+    }
     if let Err(e) = result {
         record_restore_result(
             &state,
@@ -288,6 +310,7 @@ mod tests {
     use super::*;
     use crate::audit::ConfigChange;
 
+    /// Create a successful one-option history entry for restore tests.
     fn sample() -> AuditEntry {
         AuditEntry {
             id: "history-1".into(),
@@ -311,6 +334,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks failed, secret, and cross-node entries are not restorable.
     fn rejects_failed_secret_and_cross_node_history() {
         let mut entry = sample();
         assert!(restorable(&entry));
@@ -327,6 +351,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks restore matching rejects values changed after the recorded operation.
     fn stale_state_does_not_match_recorded_after_value() {
         assert!(matches_after(Some("new".into()), &Some("new".into())));
         assert!(!matches_after(Some("later".into()), &Some("new".into())));
@@ -334,6 +359,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks reservation removal requires an exact match of the created section.
     fn reservation_restore_requires_exact_section_contents() {
         let changes = [
             ("mac", "aa:bb:cc:dd:ee:ff"),

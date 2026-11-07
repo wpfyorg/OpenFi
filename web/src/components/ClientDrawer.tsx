@@ -87,7 +87,7 @@ export function ClientDrawer({
           Reserve IP
         </Button>
         <Button icon="ban" onClick={() => setConfirmKick(true)} disabled={!client.online || client.wired || !nodePermissions?.kick}
-          title={!nodePermissions?.kick ? "rpcd ACL does not allow disconnecting clients" : client.wired ? "Wired clients can't be deauthenticated" : undefined}>
+          title={client.wired ? "Wired clients can't be deauthenticated" : client.online && !nodePermissions?.kick ? "rpcd ACL does not allow disconnecting clients" : undefined}>
           Kick from WiFi
         </Button>
       </div>
