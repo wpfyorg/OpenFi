@@ -8,6 +8,7 @@ import { toast } from "../components/Toast";
 import { useSnap } from "../context";
 
 const SECTION = "#3CC4D8";
+const CONFIGS = ["system", "wireless", "dhcp"] as const;
 
 export default function SettingsAdvanced() {
   const { snap } = useSnap();
@@ -63,7 +64,9 @@ export default function SettingsAdvanced() {
         <label class="field"><span>Node</span><select value={node} onChange={(e) => { setNode((e.currentTarget as HTMLSelectElement).value); setLoaded(false); setBase(null); setPreview(null); }}>
           {nodes.map((n) => <option value={n.name}>{n.name}{n.online ? "" : " · offline"}</option>)}
         </select></label>
-        <label class="field"><span>UCI config</span><input value={config} onInput={(e) => { setConfig((e.currentTarget as HTMLInputElement).value); setLoaded(false); setBase(null); setPreview(null); }} placeholder="e.g. system, dhcp" /></label>
+        <label class="field"><span>UCI config</span><select value={config} onChange={(e) => { setConfig((e.currentTarget as HTMLSelectElement).value); setLoaded(false); setBase(null); setPreview(null); }}>
+          {CONFIGS.map((name) => <option value={name}>{name}</option>)}
+        </select></label>
         <Button primary disabled={!node || !config.trim() || busy} onClick={() => void load()}>{busy && !loaded ? "Loading…" : "Load"}</Button>
       </div>
       {error && <ErrorState message={error} />}

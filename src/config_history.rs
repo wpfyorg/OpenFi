@@ -18,7 +18,7 @@ fn now() -> u64 {
 }
 
 use crate::{
-    AppState,
+    AppState, advanced_uci,
     audit::{AuditEntry, AuditResult, ConfigChange},
     safe_apply,
     session::Session,
@@ -180,6 +180,15 @@ pub async fn restore(
         .iter()
         .map(|change| change.config.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    if configs
+        .iter()
+        .any(|config| !advanced_uci::config_allowed(config))
+    {
+        return error(
+            StatusCode::FORBIDDEN,
+            "history entry references a UCI config outside the editable allowlist",
+        );
+    }
     for config in &configs {
         for function in ["read", "write"] {
             match ubus.has_access("uci", config, function).await {

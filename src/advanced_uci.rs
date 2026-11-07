@@ -23,6 +23,24 @@ use crate::{
 type ConfigSnapshot = BTreeMap<String, BTreeMap<String, Value>>;
 
 const STALE_CONFIG_MESSAGE: &str = "configuration changed since it was loaded; reload and retry";
+const EDITABLE_CONFIGS: &[&str] = &["wireless", "dhcp", "system"];
+
+/// Return whether a UCI config is exposed through the guarded advanced editor.
+pub(crate) fn config_allowed(config: &str) -> bool {
+    EDITABLE_CONFIGS.contains(&config)
+}
+
+/// Reject UCI configs that are outside the dashboard's bounded editable set.
+fn require_allowed_config(config: &str) -> Result<(), Response> {
+    if config_allowed(config) {
+        Ok(())
+    } else {
+        Err(err(
+            StatusCode::FORBIDDEN,
+            format!("UCI config {config:?} is not available in the advanced editor"),
+        ))
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct EditRequest {
@@ -313,6 +331,9 @@ pub async fn read_config(
     Extension(session): Extension<Arc<Session>>,
     Path((node, config)): Path<(String, String)>,
 ) -> Response {
+    if let Err(response) = require_allowed_config(&config) {
+        return response;
+    }
     let ubus = match node_handle(&state, &session, &node) {
         Ok(u) => u,
         Err(r) => return r,
@@ -336,6 +357,9 @@ pub async fn preview(
     Path((node, config)): Path<(String, String)>,
     Json(body): Json<EditRequest>,
 ) -> Response {
+    if let Err(response) = require_allowed_config(&config) {
+        return response;
+    }
     let ubus = match node_handle(&state, &session, &node) {
         Ok(u) => u,
         Err(r) => return r,
@@ -366,6 +390,9 @@ pub async fn apply(
     Path((node, config)): Path<(String, String)>,
     Json(body): Json<EditRequest>,
 ) -> Response {
+    if let Err(response) = require_allowed_config(&config) {
+        return response;
+    }
     let ubus = match node_handle(&state, &session, &node) {
         Ok(u) => u,
         Err(r) => return r,
@@ -479,6 +506,17 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+        }
+    }
+
+    #[test]
+    /// Checks the editor exposes only the bounded config set granted by the packaged admin ACL.
+    fn editable_config_allowlist_rejects_sensitive_and_unmanaged_configs() {
+        for config in ["wireless", "dhcp", "system"] {
+            assert!(config_allowed(config));
+        }
+        for config in ["rpcd", "firewall", "network", "dropbear"] {
+            assert!(!config_allowed(config));
         }
     }
 
