@@ -74,14 +74,14 @@ where
     }
 
     if let Err(error) = stage().await {
-        revert_configs(ubus, staged_configs).await;
+        revert_staged(ubus, staged_configs).await;
         return Err(Error::Stage(error));
     }
 
     let diff = match ubus.call("uci", "changes", json!({})).await {
         Ok(diff) => diff,
         Err(error) => {
-            revert_configs(ubus, staged_configs).await;
+            revert_staged(ubus, staged_configs).await;
             return Err(Error::Diff(error));
         }
     };
@@ -105,7 +105,7 @@ where
         )
         .await
     {
-        revert_configs(ubus, staged_configs).await;
+        revert_staged(ubus, staged_configs).await;
         return Err(Error::Apply(error));
     }
 
@@ -123,13 +123,35 @@ where
     })
 }
 
-/// Revert each named config's currently staged UCI changes on a staging failure.
-async fn revert_configs(ubus: &Ubus, configs: &[&str]) {
-    for config in configs {
+/// Revert every config with a staged delta on a transaction failure.
+///
+/// rpcd's `uci revert` requires `config`; without it the call is rejected and the staged delta
+/// stays in the session, where the next transaction's `uci changes` reports it and its `uci apply`
+/// commits it. The declared configs are always reverted — even when `uci changes` cannot be read —
+/// and any additional staged config rpcd reports is reverted too, so no leftover delta survives.
+async fn revert_staged(ubus: &Ubus, declared: &[&str]) {
+    let staged = ubus.call("uci", "changes", json!({})).await.ok();
+    for config in revert_targets(declared, staged.as_ref()) {
         let _ = ubus
             .call("uci", "revert", json!({ "config": config }))
             .await;
     }
+}
+
+/// Union of the caller's declared configs and the configs rpcd still reports as staged.
+fn revert_targets(declared: &[&str], staged: Option<&Value>) -> Vec<String> {
+    let mut targets: Vec<String> = declared.iter().map(|config| (*config).to_owned()).collect();
+    let reported = staged
+        .and_then(|diff| diff.get("changes"))
+        .and_then(Value::as_object);
+    if let Some(reported) = reported {
+        for config in reported.keys() {
+            if !targets.iter().any(|target| target == config) {
+                targets.push(config.clone());
+            }
+        }
+    }
+    targets
 }
 
 /// Default reachability probe using a fresh request on the same authenticated session.
@@ -241,6 +263,25 @@ mod tests {
         .await;
         assert_eq!(result, Err(Error::Stage("permission denied".into())));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    /// Checks cleanup reverts the declared configs plus any stale staged config rpcd reports.
+    fn revert_targets_cover_declared_and_stale_staged_configs() {
+        let staged = json!({
+            "changes": {
+                "wireless": [["set", "radio0", "channel", "6"]],
+                "network": [],
+            }
+        });
+        // Declared configs come first, then anything else rpcd still reports as staged.
+        assert_eq!(
+            revert_targets(&["wireless"], Some(&staged)),
+            vec!["wireless".to_owned(), "network".to_owned()]
+        );
+        // An unreadable `uci changes` still reverts the declared configs.
+        assert_eq!(revert_targets(&["dhcp"], None), vec!["dhcp".to_owned()]);
+        assert!(revert_targets(&[], Some(&json!({}))).is_empty());
     }
 
     #[tokio::test]
