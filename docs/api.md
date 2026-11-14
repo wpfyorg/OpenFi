@@ -207,9 +207,13 @@ before making a router call; rpcd remains the final enforcement point.
 | `POST /nodes/{node}/reboot` | | `system reboot` |
 | `POST /nodes/{node}/wifi/reload` | | `network.wireless` reload |
 | `POST /nodes/{node}/radios/{radio}` | `{ disabled?: boolean, channel?: number \| "auto", txpower_dbm?: number }` | `uci set wireless.<radio>.*` → apply with rollback → confirm |
-| `GET /nodes/{node}/uci/{config}` | | Existing UCI section options as `{ node, config, sections: { section: { option: value } } }`; sensitive options are masked, and the mask preserves the current value if sent back unchanged |
-| `POST /nodes/{node}/uci/{config}/preview` | `{ base, sections }`, both shaped as `{ section: { option: value } }` | Validated diff for existing sections; `base` is the masked snapshot returned by the preceding GET. Returns `409` if the visible config changed since it was loaded. Option values accept strings, booleans, integers, and scalar lists. Section identity/type/order cannot change. |
-| `POST /nodes/{node}/uci/{config}/apply` | Same as preview | Under the UCI transaction lock, rejects a stale `base` before staging writes, then calls `uci apply` with a 30-second rollback window, confirms after a fresh node health check, and audits a secret-masked diff. Disabled in mock mode. |
+| `GET /nodes/{node}/uci/{config}` | | Existing UCI section options as `{ node, config, revision, sections: { section: { option: value } } }`; sensitive options are masked, and the mask preserves the current value if sent back unchanged. `revision` is an opaque token covering the full config, including masked credentials; it changes whenever any value changes. |
+| `POST /nodes/{node}/uci/{config}/preview` | `{ revision, base, sections }`, `base` and `sections` shaped as `{ section: { option: value } }` | Validated diff for existing sections; `revision` and `base` come from the preceding GET. Returns `409` if the config changed since it was loaded — the `revision` check also catches credential changes hidden by masking. Option values accept strings, booleans, integers, and scalar lists. Section identity/type/order cannot change. |
+| `POST /nodes/{node}/uci/{config}/apply` | Same as preview | Under the UCI transaction lock, re-checks `revision` and rejects a stale `base` before staging writes, then calls `uci apply` with a 30-second rollback window, confirms after a fresh node health check, and audits a secret-masked diff. Disabled in mock mode. |
+
+The `revision` token is a keyed hash of the live config with a per-process random key, so it
+reveals no values and cannot be recomputed offline; a server restart invalidates outstanding
+tokens and the client must reload before applying.
 
 Advanced UCI reads/previews require the authenticated rpcd session's `uci:<config>.read` grant;
 apply rechecks both `uci:<config>.read` and `uci:<config>.write`. The packaged non-root admin ACL
@@ -222,8 +226,9 @@ configuration, reboot, and shell controls appear only when that node reports the
 action (`wifi.reload`, `radio.configure`, `node.reboot`, `shell.open`). An unavailable or
 malformed probe yields no corresponding action. The protocol list recognizes protocols by
 their installed OpenWrt package names. Package discovery reads `/lib/apk/db/installed` first and
-falls back to `/usr/lib/opkg/status`; if neither yields a valid installed package set, packages
-and derived protocols are empty.
+falls back to `/usr/lib/opkg/status`; if neither yields a valid installed package set, or the
+session is denied `file.read` on them, packages and derived protocols are empty while the rest of
+the capability inventory is still returned.
 
 ### Multi-node WiFi change (the "apply plan")
 
@@ -236,7 +241,10 @@ and derived protocols are empty.
    stops (`rolled_back`); later nodes stay `skipped`.
 3. `GET /wifi/plans/{id}` → `PlanStatus { id, state: "running"|"done"|"failed", steps: { node, status: "queued"|"applying"|"confirming"|"confirmed"|"rolled_back"|"failed"|"skipped", deadline: number|null, error: string|null }[] }`.
 
-Refuses (`409`) while any target node is offline or another plan is running.
+Refuses (`409`) while any target node is offline or another plan is running, and (`403`) when the
+plan was created by a different session. Before starting, apply re-checks every real node with the
+*applying* session's own rpcd handles — rejecting read-only nodes and nodes without both
+`uci:wireless.write` and a write session — and the rollout then uses those handles.
 
 ## Browser shell (off by default)
 

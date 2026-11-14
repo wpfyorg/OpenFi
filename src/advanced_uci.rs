@@ -1,7 +1,12 @@
 //! Controlled advanced UCI editor. It edits options on existing sections only; section identity,
 //! type, and order remain owned by the router. Writes use the caller's session and rpcd rollback.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, hash_map::RandomState},
+    hash::{BuildHasher, Hasher},
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use axum::{
     Extension, Json,
@@ -44,6 +49,9 @@ fn require_allowed_config(config: &str) -> Result<(), Response> {
 
 #[derive(Debug, Deserialize)]
 pub struct EditRequest {
+    /// Opaque token from the preceding `GET`; it changes whenever any value, including a masked
+    /// credential, changes on the node.
+    pub revision: String,
     pub base: ConfigSnapshot,
     pub sections: ConfigSnapshot,
 }
@@ -201,6 +209,36 @@ fn validate_base_snapshot(current: &[Section], base: &ConfigSnapshot) -> Result<
     }
 }
 
+/// Opaque conflict token for a live config snapshot.
+///
+/// The masked `base` snapshot cannot reveal a credential change, so the token hashes the full
+/// snapshot — secrets included — with a process-random key: it changes whenever any value changes,
+/// and reveals nothing about the values it covers.
+fn revision_token(sections: &[Section]) -> String {
+    static KEYS: OnceLock<RandomState> = OnceLock::new();
+    let mut hasher = KEYS.get_or_init(RandomState::new).build_hasher();
+    for section in sections {
+        hasher.write(section.name.as_bytes());
+        hasher.write_u8(0);
+        for (key, value) in &section.options {
+            hasher.write(key.as_bytes());
+            hasher.write_u8(0);
+            hasher.write(value.to_string().as_bytes());
+            hasher.write_u8(0);
+        }
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+/// Reject a request whose revision token no longer matches the live config.
+fn validate_revision(current: &[Section], revision: &str) -> Result<(), String> {
+    if revision_token(current) == revision {
+        Ok(())
+    } else {
+        Err(STALE_CONFIG_MESSAGE.into())
+    }
+}
+
 /// Remove submitted secret values from an error string before returning it to the client.
 fn scrub_sensitive_values(message: &str, changes: &[(String, String, Option<UciValue>)]) -> String {
     let mut secrets = Vec::new();
@@ -343,8 +381,15 @@ pub async fn read_config(
     }
     match uci_engine::read(ubus, &config).await {
         Ok(sections) => {
+            let revision = revision_token(&sections);
             let safe_sections = redacted_snapshot(&sections);
-            Json(json!({"node": node, "config": config, "sections": safe_sections})).into_response()
+            Json(json!({
+                "node": node,
+                "config": config,
+                "revision": revision,
+                "sections": safe_sections,
+            }))
+            .into_response()
         }
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
     }
@@ -371,6 +416,9 @@ pub async fn preview(
         Ok(s) => s,
         Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()),
     };
+    if let Err(message) = validate_revision(&sections, &body.revision) {
+        return err(StatusCode::CONFLICT, message);
+    }
     if let Err(message) = validate_base_snapshot(&sections, &body.base) {
         return err(StatusCode::CONFLICT, message);
     }
@@ -429,6 +477,9 @@ pub async fn apply(
             let current = uci_engine::read(ubus, &config)
                 .await
                 .map_err(|e| e.to_string())?;
+            // Checked inside the transaction so a credential changed behind the mask is caught
+            // before any staged write can land on top of it.
+            validate_revision(&current, &body.revision)?;
             validate_base_snapshot(&current, &body.base)?;
             for (section, option, value) in &changes {
                 match value {
@@ -609,6 +660,21 @@ mod tests {
     }
 
     #[test]
+    /// Checks the opaque revision token tracks every value, including masked credentials.
+    fn revision_token_changes_when_a_masked_credential_changes() {
+        let before = vec![section(json!({"ssid":"home","psk":"first-secret"}))];
+        let after = vec![section(json!({"ssid":"home","psk":"second-secret"}))];
+        assert_eq!(revision_token(&before), revision_token(&before));
+        assert_ne!(revision_token(&before), revision_token(&after));
+        assert!(validate_revision(&before, &revision_token(&before)).is_ok());
+        assert_eq!(
+            validate_revision(&before, &revision_token(&after)).unwrap_err(),
+            STALE_CONFIG_MESSAGE
+        );
+        assert!(!revision_token(&before).contains("first-secret"));
+    }
+
+    #[test]
     /// Checks UCI errors do not return submitted secret values.
     fn staged_errors_scrub_submitted_secret_values() {
         let changes = vec![(
@@ -670,6 +736,7 @@ mod tests {
             Extension(session),
             Path((node.clone(), "system".into())),
             Json(EditRequest {
+                revision: String::new(),
                 base: BTreeMap::new(),
                 sections: BTreeMap::new(),
             }),
@@ -692,6 +759,7 @@ mod tests {
             Extension(session),
             Path((node, "system".into())),
             Json(EditRequest {
+                revision: String::new(),
                 base: BTreeMap::new(),
                 sections: BTreeMap::new(),
             }),

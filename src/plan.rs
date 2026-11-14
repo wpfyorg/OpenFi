@@ -415,6 +415,8 @@ pub struct PlanRecord {
     diff: Vec<PlanDiff>,
     steps_exec: Vec<StepExec>,
     started: bool,
+    /// Session user that created the plan; only that user may start it.
+    creator: String,
 }
 
 #[derive(Default)]
@@ -758,6 +760,7 @@ pub async fn create_plan(
         diff: diff.clone(),
         steps_exec,
         started: false,
+        creator: session.user.clone(),
     };
     state
         .plans
@@ -785,18 +788,38 @@ pub async fn apply_plan(
         return err(StatusCode::NOT_FOUND, "unknown plan");
     };
 
-    let real_steps = {
+    let (creator, real_nodes) = {
         let record = record_arc.read().await;
-        record
-            .steps_exec
-            .iter()
-            .filter_map(|step| match &step.exec {
-                Exec::Real { ubus } => Some((step.node.clone(), ubus.clone())),
-                Exec::Mock { .. } => None,
-            })
-            .collect::<Vec<_>>()
+        (
+            record.creator.clone(),
+            record
+                .steps_exec
+                .iter()
+                .filter(|step| matches!(step.exec, Exec::Real { .. }))
+                .map(|step| step.node.clone())
+                .collect::<Vec<_>>(),
+        )
     };
-    for (node, ubus) in real_steps {
+    if creator != session.user {
+        return err(
+            StatusCode::FORBIDDEN,
+            "plan belongs to a different session; create a new plan",
+        );
+    }
+    // Authorize every real step with the *applying* session before the rollout starts.
+    for node in &real_nodes {
+        if session.read_only.contains(node) {
+            return err(
+                StatusCode::FORBIDDEN,
+                format!("{node} is read-only for this session"),
+            );
+        }
+        let Some(ubus) = session.node_ubus.get(node) else {
+            return err(
+                StatusCode::BAD_REQUEST,
+                format!("no write session for {node}"),
+            );
+        };
         match ubus.has_access("uci", "wireless", "write").await {
             Ok(true) => {}
             Ok(false) => {
@@ -822,6 +845,15 @@ pub async fn apply_plan(
         let mut record = record_arc.write().await;
         if record.started {
             return err(StatusCode::CONFLICT, "plan already applied");
+        }
+        // Rollout writes must run on this session's authenticated handles, never the handles
+        // captured when the plan was created.
+        for step in &mut record.steps_exec {
+            if matches!(step.exec, Exec::Real { .. })
+                && let Some(ubus) = session.node_ubus.get(&step.node)
+            {
+                step.exec = Exec::Real { ubus: ubus.clone() };
+            }
         }
         let snap = state.snapshot.read().await;
         for step in &record.status.steps {
@@ -905,6 +937,7 @@ mod tests {
             diff: vec![],
             steps_exec: steps,
             started: true,
+            creator: "root".into(),
         }))
     }
 
