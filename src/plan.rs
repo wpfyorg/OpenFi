@@ -27,9 +27,10 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     AppState,
-    audit::{self, AuditEntry, AuditResult},
+    audit::{self, AuditEntry, AuditResult, ConfigChange},
     config::NodeConfig,
     model::{Plan, PlanDiff, PlanRunState, PlanStatus, StepState, StepStatus},
+    safe_apply,
     session::Session,
     ubus::Ubus,
     uci_engine::{self, Section, UciValue},
@@ -123,6 +124,48 @@ struct NodeChange {
     node: String,
     section: String,
     values: BTreeMap<String, UciValue>,
+    before: BTreeMap<String, Option<serde_json::Value>>,
+}
+
+/// Convert planned wireless updates into masked, structured audit changes.
+fn audit_changes(changes: &[NodeChange]) -> Vec<ConfigChange> {
+    changes
+        .iter()
+        .flat_map(|c| {
+            c.values.iter().map(|(option, after)| {
+                let before = c.before.get(option).cloned().flatten();
+                let secret = matches!(
+                    option.as_str(),
+                    "key" | "password" | "psk" | "private_key" | "auth_token"
+                );
+                let show = |v: Option<serde_json::Value>| {
+                    v.map(|v| {
+                        if secret {
+                            audit::mask_secret("").to_owned()
+                        } else if let Some(s) = v.as_str() {
+                            s.to_owned()
+                        } else {
+                            v.to_string()
+                        }
+                    })
+                };
+                ConfigChange {
+                    node: c.node.clone(),
+                    config: "wireless".into(),
+                    section: c.section.clone(),
+                    option: option.clone(),
+                    before: show(before.clone()),
+                    after: show(Some(after.to_wire())),
+                    restorable: !secret
+                        && before
+                            .as_ref()
+                            .is_none_or(|v| !v.is_array() && !v.is_object())
+                        && !matches!(after, UciValue::List(_)),
+                    restore_section: false,
+                }
+            })
+        })
+        .collect()
 }
 
 /// Locates every wifi-iface section (across every node) belonging to the network named by
@@ -271,10 +314,23 @@ fn build_changes(
     by_node_section
         .into_iter()
         .filter(|(_, v)| !v.is_empty())
-        .map(|((node, section), values)| NodeChange {
-            node,
-            section,
-            values,
+        .map(|((node, section), values)| {
+            let before = per_node_sections
+                .get(&node)
+                .and_then(|sections| sections.iter().find(|s| s.name == section))
+                .map(|old| {
+                    values
+                        .keys()
+                        .map(|key| (key.clone(), old.options.get(key).cloned()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            NodeChange {
+                node,
+                section,
+                values,
+                before,
+            }
         })
         .collect()
 }
@@ -359,6 +415,8 @@ pub struct PlanRecord {
     diff: Vec<PlanDiff>,
     steps_exec: Vec<StepExec>,
     started: bool,
+    /// Session user that created the plan; only that user may start it.
+    creator: String,
 }
 
 #[derive(Default)]
@@ -380,6 +438,7 @@ fn gateway_may_confirm(self_reachable: bool, all_aps_reachable: bool) -> bool {
     self_reachable && all_aps_reachable
 }
 
+/// Store one plan action outcome and its structured UCI changes.
 async fn record_audit(
     state: &AppState,
     user: &str,
@@ -387,10 +446,12 @@ async fn record_audit(
     node: &str,
     ok: bool,
     detail: &str,
+    config_changes: Vec<ConfigChange>,
 ) {
     state
         .audit
         .record(AuditEntry {
+            id: String::new(),
             ts: now(),
             user: user.to_owned(),
             action: action.to_owned(),
@@ -401,6 +462,7 @@ async fn record_audit(
                 AuditResult::Error
             },
             detail: detail.to_owned(),
+            config_changes,
         })
         .await;
 }
@@ -420,6 +482,7 @@ async fn set_status(
     }
 }
 
+/// Apply rollout steps in order and confirm each node only while reachability checks pass.
 async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<PlanRecord>>) {
     let steps = record.read().await.steps_exec.clone();
     let mut failed = false;
@@ -438,16 +501,6 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
             None,
         )
         .await;
-        record_audit(
-            &state,
-            &user,
-            "plan_apply_start",
-            &step.node,
-            true,
-            "applying",
-        )
-        .await;
-
         // `Failed`: the change itself couldn't even be attempted/applied (bad uci call, rpcd
         // error). `RolledBack`: the change *was* applied but the node went unreachable before
         // it could be confirmed, so rpcd's own timer reverted it — a distinct, expected outcome
@@ -473,69 +526,72 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
                     Ok(())
                 }
             }
-            Exec::Real { ubus } => {
-                let mut set_err = None;
-                for c in &step.changes {
-                    if let Err(e) =
-                        uci_engine::update(ubus, "wireless", &c.section, &c.values).await
-                    {
-                        set_err = Some(e.to_string());
-                        break;
+            Exec::Real { ubus } => safe_apply::run(
+                ubus,
+                &["wireless"],
+                30,
+                settle_delay(),
+                || async {
+                    match ubus.has_access("uci", "wireless", "write").await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Err(format!(
+                                "rpcd ACL denies uci:wireless.write on {}",
+                                step.node
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(format!("could not verify rpcd ACL on {}: {e}", step.node));
+                        }
                     }
-                }
-                if let Some(e) = set_err {
-                    Err((StepState::Failed, e))
-                } else {
-                    match ubus
-                        .call("uci", "apply", json!({ "rollback": true, "timeout": 30 }))
-                        .await
-                    {
-                        Err(e) => Err((StepState::Failed, e)),
-                        Ok(_) => {
-                            tokio::time::sleep(settle_delay()).await;
-                            set_status(
-                                &record,
-                                &step.node,
-                                StepState::Confirming,
-                                Some(now() + 5),
-                                None,
-                            )
-                            .await;
-                            let self_ok = ubus.call("system", "board", json!({})).await.is_ok();
-                            let mut aps_ok = true;
-                            if step.is_gateway {
-                                for prior in &confirmed_real {
-                                    if prior.is_gateway {
-                                        continue;
-                                    }
-                                    if let Exec::Real { ubus: pu } = &prior.exec
-                                        && pu.call("system", "board", json!({})).await.is_err()
-                                    {
-                                        aps_ok = false;
-                                        break;
-                                    }
-                                }
+                    for change in &step.changes {
+                        uci_engine::update(ubus, "wireless", &change.section, &change.values)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                },
+                || async {
+                    set_status(
+                        &record,
+                        &step.node,
+                        StepState::Confirming,
+                        Some(now() + 5),
+                        None,
+                    )
+                    .await;
+                    let self_ok = safe_apply::board_reachable(ubus).await;
+                    let mut aps_ok = true;
+                    if step.is_gateway {
+                        for prior in &confirmed_real {
+                            if prior.is_gateway {
+                                continue;
                             }
-                            let ok = if step.is_gateway {
-                                gateway_may_confirm(self_ok, aps_ok)
-                            } else {
-                                self_ok
-                            };
-                            if ok {
-                                ubus.call("uci", "confirm", json!({}))
-                                    .await
-                                    .map(|_| ())
-                                    .map_err(|e| (StepState::Failed, e))
-                            } else {
-                                Err((
-                                    StepState::RolledBack,
-                                    "node unreachable after apply; rolled back".to_owned(),
-                                ))
+                            if let Exec::Real { ubus: prior_ubus } = &prior.exec
+                                && !safe_apply::board_reachable(prior_ubus).await
+                            {
+                                aps_ok = false;
+                                break;
                             }
                         }
                     }
-                }
-            }
+                    if step.is_gateway {
+                        gateway_may_confirm(self_ok, aps_ok)
+                    } else {
+                        self_ok
+                    }
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| {
+                let state = if matches!(e, safe_apply::Error::RollbackArmed { .. }) {
+                    StepState::RolledBack
+                } else {
+                    StepState::Failed
+                };
+                (state, e.to_string())
+            }),
         };
 
         match outcome {
@@ -548,6 +604,7 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
                     &step.node,
                     true,
                     "confirmed",
+                    audit_changes(&step.changes),
                 )
                 .await;
                 confirmed_real.push(step.clone());
@@ -559,7 +616,16 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
                     "plan_apply_failed"
                 };
                 set_status(&record, &step.node, status, None, Some(e.clone())).await;
-                record_audit(&state, &user, action, &step.node, false, &e).await;
+                record_audit(
+                    &state,
+                    &user,
+                    action,
+                    &step.node,
+                    false,
+                    &e,
+                    audit_changes(&step.changes),
+                )
+                .await;
                 failed = true;
             }
         }
@@ -580,6 +646,7 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
 // HTTP handlers
 // -------------------------------------------------------------------------------------------
 
+/// Validate a requested network update and return a preview with an opaque plan ID.
 pub async fn create_plan(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<Arc<Session>>,
@@ -648,6 +715,21 @@ pub async fn create_plan(
                     format!("no write session for {node}"),
                 );
             };
+            match ubus.has_access("uci", "wireless", "write").await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return err(
+                        StatusCode::FORBIDDEN,
+                        format!("rpcd ACL denies uci:wireless.write on {node}"),
+                    );
+                }
+                Err(e) => {
+                    return err(
+                        StatusCode::FORBIDDEN,
+                        format!("could not verify rpcd ACL on {node}: {e}"),
+                    );
+                }
+            }
             Exec::Real { ubus: ubus.clone() }
         };
         steps_exec.push(StepExec {
@@ -678,6 +760,7 @@ pub async fn create_plan(
         diff: diff.clone(),
         steps_exec,
         started: false,
+        creator: session.user.clone(),
     };
     state
         .plans
@@ -695,6 +778,7 @@ pub async fn create_plan(
     .into_response()
 }
 
+/// Start applying a previously created plan, rejecting duplicate or unknown runs.
 pub async fn apply_plan(
     State(state): State<Arc<AppState>>,
     Extension(session): Extension<Arc<Session>>,
@@ -704,6 +788,55 @@ pub async fn apply_plan(
         return err(StatusCode::NOT_FOUND, "unknown plan");
     };
 
+    let (creator, real_nodes) = {
+        let record = record_arc.read().await;
+        (
+            record.creator.clone(),
+            record
+                .steps_exec
+                .iter()
+                .filter(|step| matches!(step.exec, Exec::Real { .. }))
+                .map(|step| step.node.clone())
+                .collect::<Vec<_>>(),
+        )
+    };
+    if creator != session.user {
+        return err(
+            StatusCode::FORBIDDEN,
+            "plan belongs to a different session; create a new plan",
+        );
+    }
+    // Authorize every real step with the *applying* session before the rollout starts.
+    for node in &real_nodes {
+        if session.read_only.contains(node) {
+            return err(
+                StatusCode::FORBIDDEN,
+                format!("{node} is read-only for this session"),
+            );
+        }
+        let Some(ubus) = session.node_ubus.get(node) else {
+            return err(
+                StatusCode::BAD_REQUEST,
+                format!("no write session for {node}"),
+            );
+        };
+        match ubus.has_access("uci", "wireless", "write").await {
+            Ok(true) => {}
+            Ok(false) => {
+                return err(
+                    StatusCode::FORBIDDEN,
+                    format!("rpcd ACL denies uci:wireless.write on {node}"),
+                );
+            }
+            Err(e) => {
+                return err(
+                    StatusCode::FORBIDDEN,
+                    format!("could not verify rpcd ACL on {node}: {e}"),
+                );
+            }
+        }
+    }
+
     {
         let mut running = state.plans.running.lock().await;
         if running.is_some() {
@@ -712,6 +845,15 @@ pub async fn apply_plan(
         let mut record = record_arc.write().await;
         if record.started {
             return err(StatusCode::CONFLICT, "plan already applied");
+        }
+        // Rollout writes must run on this session's authenticated handles, never the handles
+        // captured when the plan was created.
+        for step in &mut record.steps_exec {
+            if matches!(step.exec, Exec::Real { .. })
+                && let Some(ubus) = session.node_ubus.get(&step.node)
+            {
+                step.exec = Exec::Real { ubus: ubus.clone() };
+            }
         }
         let snap = state.snapshot.read().await;
         for step in &record.status.steps {
@@ -795,6 +937,7 @@ mod tests {
             diff: vec![],
             steps_exec: steps,
             started: true,
+            creator: "root".into(),
         }))
     }
 
@@ -828,6 +971,7 @@ mod tests {
         let changes = vec![NodeChange {
             node: "ap-2".into(),
             section: "default_radio1".into(),
+            before: BTreeMap::new(),
             values: {
                 let mut m = BTreeMap::new();
                 m.insert("ssid".into(), UciValue::String("NewWifi".into()));
@@ -843,6 +987,36 @@ mod tests {
                 .iter()
                 .any(|l| l.contains('\u{2022}') && !l.contains("supersecret"))
         );
+    }
+
+    #[test]
+    /// Checks history masks secrets and permits restoration only for scalar public values.
+    fn history_masks_secrets_and_marks_only_scalar_public_values_restorable() {
+        let changes = vec![NodeChange {
+            node: "ap-2".into(),
+            section: "wifi_main".into(),
+            before: BTreeMap::from([
+                ("ssid".into(), Some(serde_json::Value::String("Old".into()))),
+                (
+                    "key".into(),
+                    Some(serde_json::Value::String("old-secret".into())),
+                ),
+            ]),
+            values: BTreeMap::from([
+                ("ssid".into(), UciValue::String("New".into())),
+                ("key".into(), UciValue::String("new-secret".into())),
+            ]),
+        }];
+        let rows = audit_changes(&changes);
+        let ssid = rows.iter().find(|r| r.option == "ssid").unwrap();
+        assert_eq!(ssid.before.as_deref(), Some("Old"));
+        assert_eq!(ssid.after.as_deref(), Some("New"));
+        assert!(ssid.restorable);
+        let key = rows.iter().find(|r| r.option == "key").unwrap();
+        assert_eq!(key.before.as_deref(), Some("••••••••"));
+        assert_eq!(key.after.as_deref(), Some("••••••••"));
+        assert!(!key.restorable);
+        assert!(!serde_json::to_string(&rows).unwrap().contains("secret"));
     }
 
     #[test]

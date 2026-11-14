@@ -1,7 +1,7 @@
 // Side panel for a selected topology node: identity, health meters, radios, links and node actions.
 // Used by pages/Topology.tsx. Actions call the existing /nodes/{n}/... routes from api.ts.
-import { useState } from "preact/hooks";
-import { patchRadio, reloadWifi, rebootNode } from "../api";
+import { useEffect, useState } from "preact/hooks";
+import { getNodeCapabilities, patchRadio, reloadWifi, rebootNode } from "../api";
 import { toast } from "./Toast";
 import { Dialog } from "./Dialog";
 import { Button } from "./Button";
@@ -10,7 +10,8 @@ import { NodeTag } from "./NodeTag";
 import { ShareBar } from "./ShareBar";
 import { celsius, uptime } from "../format";
 import { nodeColor } from "../tokens";
-import type { Node, Radio as RadioT, Temp } from "../types";
+import { useSnap } from "../context";
+import type { Node, NodeCapabilities, Radio as RadioT, Temp } from "../types";
 
 export interface NodeCardProps {
   node: Node;
@@ -21,8 +22,18 @@ export interface NodeCardProps {
 
 /** Node identity + health + radios + links + actions. The right-hand panel on the Topology page. */
 export function NodeCard({ node, wanIp, onOpenShell }: NodeCardProps) {
+  const { permissions } = useSnap();
+  const nodePermissions = permissions[node.name];
   const [rebootOpen, setRebootOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<NodeCapabilities | null>(null);
+  useEffect(() => {
+    let current = true;
+    setCapabilities(null);
+    getNodeCapabilities(node.name).then((value) => { if (current) setCapabilities(value); }, () => { if (current) setCapabilities(null); });
+    return () => { current = false; };
+  }, [node.name]);
+  const supports = (action: string) => capabilities?.actions.includes(action) ?? false;
 
   const cpu = Math.min(99, Math.round(node.load[0] * 100));
   const memUsed = node.mem_total - node.mem_available;
@@ -110,7 +121,15 @@ export function NodeCard({ node, wanIp, onOpenShell }: NodeCardProps) {
       {node.radios.length > 0 && (
         <div class="node-card-section">
           <h3>Radios</h3>
-          {node.radios.map((r) => <RadioRow key={r.name} radio={r} node={node.name} />)}
+          {node.radios.map((r) => (
+            <RadioRow
+              key={r.name}
+              radio={r}
+              node={node.name}
+              supported={supports("radio.configure")}
+              allowed={!!nodePermissions?.radio_write}
+            />
+          ))}
         </div>
       )}
 
@@ -131,18 +150,28 @@ export function NodeCard({ node, wanIp, onOpenShell }: NodeCardProps) {
       )}
 
       <div class="node-card-actions">
-        <Button icon="refresh-cw" onClick={restartWifi} disabled={!node.online || busy !== null} title={!node.online ? "Node is offline" : undefined}>
+        {supports("wifi.reload") && <Button
+          icon="refresh-cw"
+          onClick={restartWifi}
+          disabled={!node.online || busy !== null || !nodePermissions?.wifi_reload}
+          title={!nodePermissions?.wifi_reload ? "rpcd ACL does not allow WiFi reload" : !node.online ? "Node is offline" : undefined}
+        >
           Restart WiFi
-        </Button>
-        <Button icon="power" onClick={() => setRebootOpen(true)} disabled={!node.online || busy !== null}>
+        </Button>}
+        {supports("node.reboot") && <Button
+          icon="power"
+          onClick={() => setRebootOpen(true)}
+          disabled={!node.online || busy !== null || !nodePermissions?.reboot}
+          title={!nodePermissions?.reboot ? "rpcd ACL does not allow reboot" : undefined}
+        >
           Reboot
-        </Button>
+        </Button>}
         <a class="btn" href={`http://${node.host}/cgi-bin/luci`} target="_blank" rel="noopener noreferrer">
           <Icon name="external-link" size={13} /> Open LuCI
         </a>
-        <Button icon="terminal" primary onClick={() => onOpenShell(node.name)} disabled={!node.online}>
+        {supports("shell.open") && <Button icon="terminal" primary onClick={() => onOpenShell(node.name)} disabled={!node.online}>
           Shell
-        </Button>
+        </Button>}
       </div>
 
       {rebootOpen && (
@@ -162,7 +191,17 @@ function Meter({ label, value, sub }: { label: string; value: number; sub?: stri
   );
 }
 
-function RadioRow({ radio, node }: { radio: RadioT; node: string }) {
+function RadioRow({
+  radio,
+  node,
+  supported,
+  allowed,
+}: {
+  radio: RadioT;
+  node: string;
+  supported: boolean;
+  allowed: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   async function toggleDisabled() {
     setBusy(true);
@@ -182,9 +221,15 @@ function RadioRow({ radio, node }: { radio: RadioT; node: string }) {
       <span class="mono small muted">{radio.disabled ? "disabled" : `ch ${radio.channel ?? "–"} ${radio.htmode ?? ""}`}</span>
       <span class="mono small muted">{radio.disabled ? "" : `${radio.txpower_dbm ?? "–"} dBm`}</span>
       <span class="mono small radio-row-clients">{radio.clients}</span>
-      <button type="button" class="btn btn-tiny" onClick={toggleDisabled} disabled={busy}>
+      {supported && <button
+        type="button"
+        class="btn btn-tiny"
+        onClick={toggleDisabled}
+        disabled={busy || !allowed}
+        title={!allowed ? "rpcd ACL does not allow wireless configuration" : undefined}
+      >
         {radio.disabled ? "Enable" : "Disable"}
-      </button>
+      </button>}
     </div>
   );
 }

@@ -20,8 +20,7 @@ use serde_json::json;
 
 use crate::{
     AppState,
-    audit::{AuditEntry, AuditResult},
-    collectors::uci,
+    audit::{self, AuditEntry, AuditResult, ConfigChange},
     session::Session,
     uci_engine::{self, UciValue},
     validate,
@@ -38,6 +37,7 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
+/// Record one action result without structured UCI change details.
 async fn audit(
     state: &AppState,
     session: &Session,
@@ -52,12 +52,42 @@ async fn audit(
     state
         .audit
         .record(AuditEntry {
+            id: String::new(),
             ts: now(),
             user: session.user.clone(),
             action: action.to_owned(),
             target: target.to_owned(),
             result,
             detail,
+            config_changes: vec![],
+        })
+        .await;
+}
+
+/// Record an action outcome together with its structured UCI changes.
+async fn audit_config(
+    state: &AppState,
+    session: &Session,
+    action: &str,
+    target: &str,
+    result: Result<&str, &str>,
+    config_changes: Vec<ConfigChange>,
+) {
+    let (result, detail) = match result {
+        Ok(detail) => (AuditResult::Ok, detail.to_owned()),
+        Err(detail) => (AuditResult::Error, detail.to_owned()),
+    };
+    state
+        .audit
+        .record(AuditEntry {
+            id: String::new(),
+            ts: now(),
+            user: session.user.clone(),
+            action: action.into(),
+            target: target.into(),
+            result,
+            detail,
+            config_changes,
         })
         .await;
 }
@@ -104,6 +134,63 @@ fn node_ubus<'a>(
     })
 }
 
+/// Require the caller's rpcd session to grant the requested object method.
+async fn require_acl(
+    ubus: &crate::ubus::Ubus,
+    scope: &str,
+    object: &str,
+    function: &str,
+) -> Result<(), String> {
+    enforce_acl_result(
+        ubus.has_access(scope, object, function).await,
+        scope,
+        object,
+        function,
+    )
+}
+
+/// Convert an ACL probe into an authorization result, failing closed on probe errors.
+fn enforce_acl_result(
+    result: Result<bool, String>,
+    scope: &str,
+    object: &str,
+    function: &str,
+) -> Result<(), String> {
+    match result {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!("rpcd ACL denies {scope}:{object}.{function}")),
+        Err(e) => Err(format!(
+            "could not verify rpcd ACL for {scope}:{object}.{function}: {e}"
+        )),
+    }
+}
+
+/// Format a forbidden response for an ACL denial or failed ACL probe.
+fn acl_denied(message: String) -> Response {
+    err(StatusCode::FORBIDDEN, message)
+}
+
+#[cfg(test)]
+mod acl_tests {
+    use super::*;
+
+    #[test]
+    /// Checks denied and unverifiable ACL probes never authorize a write.
+    fn denied_or_unverifiable_acl_never_authorizes_a_mutation() {
+        assert!(
+            enforce_acl_result(Ok(false), "uci", "wireless", "write")
+                .unwrap_err()
+                .contains("rpcd ACL denies")
+        );
+        assert!(
+            enforce_acl_result(Err("rpcd unavailable".into()), "uci", "wireless", "write")
+                .unwrap_err()
+                .contains("could not verify rpcd ACL")
+        );
+        assert!(enforce_acl_result(Ok(true), "uci", "wireless", "write").is_ok());
+    }
+}
+
 // -------------------------------------------------------------------------------------------
 // POST /clients/{mac}/kick
 // -------------------------------------------------------------------------------------------
@@ -113,6 +200,7 @@ pub struct KickBody {
     pub ban_secs: Option<u64>,
 }
 
+/// Disconnect an online wireless client through its associated access point.
 pub async fn kick(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -153,6 +241,10 @@ pub async fn kick(
             return resp;
         }
     };
+    if let Err(e) = require_acl(ubus, "ubus", &format!("hostapd.{iface}"), "del_client").await {
+        audit(&state, &session, "kick", &mac, Err(&e)).await;
+        return acl_denied(e);
+    }
 
     // Mock mode: fixture `Ubus` calls just read static JSON off disk, and there's nothing
     // meaningful to fake for a `hostapd del_client` reply — treat it as an immediate success
@@ -203,6 +295,7 @@ pub struct ReserveBody {
     pub name: String,
 }
 
+/// Create a DHCP host reservation and record the created UCI options.
 pub async fn reserve(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -235,10 +328,15 @@ pub async fn reserve(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "uci", "dhcp", "write").await {
+        audit(&state, &session, "reserve", &mac, Err(&e)).await;
+        return acl_denied(e);
+    }
 
     let target = format!("{mac} -> {} ({})", body.ip, body.name);
     // Mock mode: fixtures have no `uci add`/`apply`/`confirm` replies to read — treat it as an
     // immediate success (see the kick handler's identical note).
+    let mut created_section = None;
     let outcome: Result<(), String> = if state.mock.enabled() {
         Ok(())
     } else {
@@ -247,28 +345,69 @@ pub async fn reserve(
             values.insert("mac".into(), UciValue::String(mac.clone()));
             values.insert("ip".into(), UciValue::String(body.ip.clone()));
             values.insert("name".into(), UciValue::String(body.name.clone()));
-            uci_engine::create(ubus, "dhcp", "host", None, &values)
-                .await
-                .map_err(|e| e.to_string())?;
-            uci::apply_confirm(ubus, 30).await
+            crate::safe_apply::run(
+                ubus,
+                &["dhcp"],
+                30,
+                std::time::Duration::from_secs(3),
+                || async {
+                    let section = uci_engine::create(ubus, "dhcp", "host", None, &values)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    created_section = Some(section);
+                    Ok(())
+                },
+                || async { crate::safe_apply::board_reachable(ubus).await },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
         }
         .await
     };
+    let config_changes = created_section.map_or_else(Vec::new, |section| {
+        [
+            ("mac", mac.clone()),
+            ("ip", body.ip.clone()),
+            ("name", body.name.clone()),
+        ]
+        .into_iter()
+        .map(|(option, value)| ConfigChange {
+            node: gateway.clone(),
+            config: "dhcp".into(),
+            section: section.clone(),
+            option: option.into(),
+            before: None,
+            after: Some(value),
+            restorable: true,
+            restore_section: true,
+        })
+        .collect()
+    });
 
     match outcome {
         Ok(()) => {
-            audit(
+            audit_config(
                 &state,
                 &session,
                 "reserve",
                 &target,
                 Ok(warning.as_deref().unwrap_or("ok")),
+                config_changes,
             )
             .await;
             Json(json!({ "ok": true, "warning": warning })).into_response()
         }
         Err(e) => {
-            audit(&state, &session, "reserve", &target, Err(&e)).await;
+            audit_config(
+                &state,
+                &session,
+                "reserve",
+                &target,
+                Err(&e),
+                config_changes,
+            )
+            .await;
             err(StatusCode::BAD_GATEWAY, e)
         }
     }
@@ -283,6 +422,7 @@ pub struct WhitelistBody {
     pub on: bool,
 }
 
+/// Enable or disable the client's whitelist entry.
 pub async fn whitelist(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -302,6 +442,10 @@ pub async fn whitelist(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "ubus", "file", "exec").await {
+        audit(&state, &session, "whitelist", &mac, Err(&e)).await;
+        return acl_denied(e);
+    }
     let state_str = if body.on { "on" } else { "off" };
     let target = format!("{mac} -> {state_str}");
 
@@ -335,6 +479,7 @@ pub async fn whitelist(
 // POST /nodes/{node}/reboot
 // -------------------------------------------------------------------------------------------
 
+/// Reboot a node through the caller's authenticated rpcd session.
 pub async fn reboot(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -344,6 +489,10 @@ pub async fn reboot(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "ubus", "system", "reboot").await {
+        audit(&state, &session, "reboot", &node, Err(&e)).await;
+        return acl_denied(e);
+    }
     // Mock mode: don't actually try to exec a fixture file for this — just record it. A real
     // reboot obviously also never returns a normal ubus reply (the box goes down mid-call).
     let result = if state.mock.enabled() {
@@ -367,6 +516,7 @@ pub async fn reboot(
 // POST /nodes/{node}/wifi/reload
 // -------------------------------------------------------------------------------------------
 
+/// Reload the wireless service on a node.
 pub async fn wifi_reload(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -376,6 +526,10 @@ pub async fn wifi_reload(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "ubus", "network.wireless", "reload").await {
+        audit(&state, &session, "wifi_reload", &node, Err(&e)).await;
+        return acl_denied(e);
+    }
     // `network.wireless reload` restarts just the wifi stack (hostapd/wpa_supplicant/mesh),
     // which is what LuCI's Wireless page's "Restart" button does — a plain `network reload`
     // would also cycle wired interfaces/DHCP for no reason. Documented here since docs/api.md
@@ -421,6 +575,7 @@ pub enum AutoTag {
     Auto,
 }
 
+/// Update supported settings on one wireless radio and record the resulting values.
 pub async fn set_radio(
     State(state): State<Arc<AppState>>,
     axum::Extension(session): axum::Extension<Arc<Session>>,
@@ -431,6 +586,17 @@ pub async fn set_radio(
         Ok(u) => u,
         Err(resp) => return resp,
     };
+    if let Err(e) = require_acl(ubus, "uci", "wireless", "write").await {
+        audit(
+            &state,
+            &session,
+            "radio_set",
+            &format!("{node}/{radio}"),
+            Err(&e),
+        )
+        .await;
+        return acl_denied(e);
+    }
 
     let is_5ghz = {
         let snap = state.snapshot.read().await;
@@ -442,7 +608,7 @@ pub async fn set_radio(
             .unwrap_or(false)
     };
 
-    let mut values = BTreeMap::new();
+    let mut values: BTreeMap<String, UciValue> = BTreeMap::new();
     if let Some(disabled) = body.disabled {
         values.insert("disabled".into(), UciValue::Bool(disabled));
     }
@@ -476,15 +642,66 @@ pub async fn set_radio(
         _ => None,
     };
     let target = format!("{node}/{radio}");
+    let old_section = uci_engine::read(ubus, "wireless")
+        .await
+        .ok()
+        .and_then(|sections| sections.into_iter().find(|section| section.name == radio));
+    let config_changes: Vec<ConfigChange> = values
+        .iter()
+        .map(|(option, after)| {
+            let before = old_section
+                .as_ref()
+                .and_then(|section| section.options.get(option));
+            let secret = matches!(
+                option.as_str(),
+                "key" | "password" | "psk" | "private_key" | "auth_token"
+            );
+            let show = |value: Option<&serde_json::Value>| {
+                value.map(|value| {
+                    if secret {
+                        audit::mask_secret("").to_owned()
+                    } else if let Some(text) = value.as_str() {
+                        text.to_owned()
+                    } else {
+                        value.to_string()
+                    }
+                })
+            };
+            ConfigChange {
+                node: node.clone(),
+                config: "wireless".into(),
+                section: radio.clone(),
+                option: option.clone(),
+                before: show(before),
+                after: show(Some(&after.to_wire())),
+                restorable: !secret
+                    && old_section.is_some()
+                    && before.is_none_or(|value| !value.is_array() && !value.is_object())
+                    && !matches!(after, UciValue::List(_)),
+                restore_section: false,
+            }
+        })
+        .collect();
     // Mock mode: same as `reserve` — no fixture models `uci set`/`apply`/`confirm` replies.
     let outcome: Result<(), String> = if state.mock.enabled() {
         Ok(())
     } else {
         async {
-            uci_engine::update(ubus, "wireless", &radio, &values)
-                .await
-                .map_err(|e| e.to_string())?;
-            uci::apply_confirm(ubus, 30).await
+            crate::safe_apply::run(
+                ubus,
+                &["wireless"],
+                30,
+                std::time::Duration::from_secs(3),
+                || async {
+                    uci_engine::update(ubus, "wireless", &radio, &values)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+                || async { crate::safe_apply::board_reachable(ubus).await },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
         }
         .await
     };
@@ -495,11 +712,27 @@ pub async fn set_radio(
                 .mock
                 .set_radio(&node, &radio, body.disabled, channel_num, body.txpower_dbm)
                 .await;
-            audit(&state, &session, "radio_set", &target, Ok("ok")).await;
+            audit_config(
+                &state,
+                &session,
+                "radio_set",
+                &target,
+                Ok("ok"),
+                config_changes,
+            )
+            .await;
             Json(json!({ "ok": true })).into_response()
         }
         Err(e) => {
-            audit(&state, &session, "radio_set", &target, Err(&e)).await;
+            audit_config(
+                &state,
+                &session,
+                "radio_set",
+                &target,
+                Err(&e),
+                config_changes,
+            )
+            .await;
             err(StatusCode::BAD_GATEWAY, e)
         }
     }

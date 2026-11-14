@@ -405,6 +405,17 @@ main { padding: 24px 32px 40px; flex: 1; min-width: 0; }
   display: flex; flex-direction: column; gap: 3px; align-items: flex-start; background: none; border: none;
   color: inherit; font: inherit; padding: 0; cursor: pointer; width: 100%; text-align: left;
 }
+.uci-editor-field { margin-top: 16px; }
+.uci-editor {
+  width: 100%; min-height: 360px; resize: vertical; font: 12px/1.55 var(--mono);
+  color: var(--text); background: var(--raised); border: 1px solid var(--border);
+  border-radius: var(--r-control); padding: 12px; tab-size: 2;
+}
+.uci-editor:focus { outline: 1px solid var(--section); border-color: var(--section); }
+.form-row { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.form-row .field { flex: 1 1 180px; }
+.form-row input, .form-row select { font: inherit; color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-control); padding: 7px 9px; }
+.form-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
 
 /* ---------------------------------------------------------------- topology graph */
 .topo-row { align-items: stretch; }

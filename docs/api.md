@@ -53,6 +53,13 @@ interface Node {
   radios: Radio[];
   links: Link[];              // mesh peers + wired uplink
 }
+interface NodeCapabilities {
+  packages: string[];         // APK installed database, then legacy opkg status; empty if unavailable
+  ubus_objects: { name: string; methods: string[] }[];
+  protocols: string[];        // protocols recognized from installed packages
+  services: string[];         // names returned by service.list
+  actions: string[];          // positively discovered UI action identifiers
+}
 interface Temp { label: string; celsius: number; crit: number | null }
 interface Radio {
   name: string;               // uci section, e.g. "radio0"
@@ -135,8 +142,13 @@ interface Health { status: "ok" | "degraded" | "down"; reasons: string[] }
 | `GET /history?range=24h\|7d` | `RatePoint[]` (24h: 30-min buckets; 7d: 3-h buckets, from RAM ring + `/tmp/openwrtfi-history.json`) |
 | `GET /usage/daily?days=30` | `{ day: "YYYY-MM-DD", rx_bytes, tx_bytes, devices }[]` from OpenWrtFi's WAN-counter rollup |
 | `GET /wifi/networks` | `WifiNetwork[]` (see below) |
+| `GET /nodes/{node}/capabilities` | `NodeCapabilities`; failed probes omit capabilities |
 | `GET /logs?node=<name>&lines=200` | `{ ts, node, level: "info"\|"warn"\|"err", source, msg }[]` from `logread` |
-| `GET /audit` | `{ ts, user, action, target, result: "ok"\|"error", detail }[]` newest first |
+| `GET /audit` | `{ id, ts, user, action, target, result: "ok"\|"error", detail, config_changes? }[]` newest first |
+| `GET /config-history` | Configuration audit rows with node-scoped masked UCI `before`/`after` changes |
+| `POST /config-history/{id}/restore` | Restore a successful supported row if current values still match its recorded `after` values |
+
+Configuration history is stored in the audit JSONL file (default `/etc/openwrtfi/audit.jsonl`, configurable with `audit_log`). WiFi plan and radio rows redact key/password values and do not allow restoring secret or list-valued options. DHCP reservation restore removes its created host section only when every recorded field matches and the section has no extra options. Restore preflights state and refuses stale changes before staging; scalar non-secret UCI values are supported.
 
 Daily usage accumulates deltas from the gateway WAN interface counters and counts distinct devices
 observed online each local calendar day. The local day uses `local_utc_offset_secs` from the
@@ -171,12 +183,19 @@ interface WifiNetwork {
 | Route | Body | Result |
 |---|---|---|
 | `POST /auth/login` | `{ username, password }` | `200 { user }` + Set-Cookie, or `401` |
-| `GET /auth/me` | | `{ user, expires }` or `401` |
+| `GET /auth/me` | | `{ user, expires, permissions }` or `401` |
 | `POST /auth/logout` | | `204`, cookie cleared |
 
 Login validates with `ubus call session login` on the gateway (the LuCI root password). The session
 also logs in to each AP's rpcd with the same credentials, so remote writes run under the user's own
 rpcd sessions and existing ACLs. Sessions expire after 30 min idle.
+
+`permissions` maps node names to booleans derived from that node's authenticated rpcd session:
+`read` (`uci:wireless.read`), `radio_write` (`uci:wireless.write`), `reserve`
+(`uci:dhcp.write`), `whitelist` (`ubus:file.exec`), `kick` (`ubus:hostapd.*.del_client`),
+`reboot` (`ubus:system.reboot`), and `wifi_reload` (`ubus:network.wireless.reload`). A failed or
+malformed ACL query denies the capability. Mutation handlers recheck the relevant ACL immediately
+before making a router call; rpcd remains the final enforcement point.
 
 ## Actions (all require session + `X-OpenWrtFi: 1`; each writes an audit entry)
 
@@ -188,6 +207,28 @@ rpcd sessions and existing ACLs. Sessions expire after 30 min idle.
 | `POST /nodes/{node}/reboot` | | `system reboot` |
 | `POST /nodes/{node}/wifi/reload` | | `network.wireless` reload |
 | `POST /nodes/{node}/radios/{radio}` | `{ disabled?: boolean, channel?: number \| "auto", txpower_dbm?: number }` | `uci set wireless.<radio>.*` → apply with rollback → confirm |
+| `GET /nodes/{node}/uci/{config}` | | Existing UCI section options as `{ node, config, revision, sections: { section: { option: value } } }`; sensitive options are masked, and the mask preserves the current value if sent back unchanged. `revision` is an opaque token covering the full config, including masked credentials; it changes whenever any value changes. |
+| `POST /nodes/{node}/uci/{config}/preview` | `{ revision, base, sections }`, `base` and `sections` shaped as `{ section: { option: value } }` | Validated diff for existing sections; `revision` and `base` come from the preceding GET. Returns `409` if the config changed since it was loaded — the `revision` check also catches credential changes hidden by masking. Option values accept strings, booleans, integers, and scalar lists. Section identity/type/order cannot change. |
+| `POST /nodes/{node}/uci/{config}/apply` | Same as preview | Under the UCI transaction lock, re-checks `revision` and rejects a stale `base` before staging writes, then calls `uci apply` with a 30-second rollback window, confirms after a fresh node health check, and audits a secret-masked diff. Disabled in mock mode. |
+
+The `revision` token is a keyed hash of the live config with a per-process random key, so it
+reveals no values and cannot be recomputed offline; a server restart invalidates outstanding
+tokens and the client must reload before applying.
+
+Advanced UCI reads/previews require the authenticated rpcd session's `uci:<config>.read` grant;
+apply rechecks both `uci:<config>.read` and `uci:<config>.write`. The packaged non-root admin ACL
+and the server expose only the `wireless`, `dhcp`, and `system` configs; arbitrary configs such as
+`rpcd` are rejected. The ACL also grants the ubus `uci get/changes/set/add/delete/apply/confirm/revert`
+and `system board` methods needed by the same guarded transaction flow.
+
+The topology node panel requests capabilities for its selected node. Wi-Fi reload, radio
+configuration, reboot, and shell controls appear only when that node reports the matching
+action (`wifi.reload`, `radio.configure`, `node.reboot`, `shell.open`). An unavailable or
+malformed probe yields no corresponding action. The protocol list recognizes protocols by
+their installed OpenWrt package names. Package discovery reads `/lib/apk/db/installed` first and
+falls back to `/usr/lib/opkg/status`; if neither yields a valid installed package set, or the
+session is denied `file.read` on them, packages and derived protocols are empty while the rest of
+the capability inventory is still returned.
 
 ### Multi-node WiFi change (the "apply plan")
 
@@ -200,7 +241,10 @@ rpcd sessions and existing ACLs. Sessions expire after 30 min idle.
    stops (`rolled_back`); later nodes stay `skipped`.
 3. `GET /wifi/plans/{id}` → `PlanStatus { id, state: "running"|"done"|"failed", steps: { node, status: "queued"|"applying"|"confirming"|"confirmed"|"rolled_back"|"failed"|"skipped", deadline: number|null, error: string|null }[] }`.
 
-Refuses (`409`) while any target node is offline or another plan is running.
+Refuses (`409`) while any target node is offline or another plan is running, and (`403`) when the
+plan was created by a different session. Before starting, apply re-checks every real node with the
+*applying* session's own rpcd handles — rejecting read-only nodes and nodes without both
+`uci:wireless.write` and a write session — and the rollout then uses those handles.
 
 ## Browser shell (off by default)
 

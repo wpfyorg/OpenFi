@@ -112,8 +112,14 @@ pub async fn login(
         .into_response()
 }
 
+/// Return the current user's identity, session expiry, and per-node permissions.
 pub async fn me(Extension(session): Extension<Arc<Session>>) -> Response {
-    Json(json!({ "user": session.user, "expires": session.expires_at() })).into_response()
+    Json(json!({
+        "user": session.user,
+        "expires": session.expires_at(),
+        "permissions": session.permissions,
+    }))
+    .into_response()
 }
 
 pub async fn logout(

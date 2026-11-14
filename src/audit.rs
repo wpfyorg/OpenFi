@@ -1,4 +1,4 @@
-//! In-memory audit log, and its on-disk mirror (`/tmp/openwrtfi-audit.log`, JSON lines, capped
+//! In-memory audit log, and its on-disk mirror (`/etc/openwrtfi/audit.jsonl`, JSON lines, capped
 //! at 1000). Every action handler (`src/actions.rs`, `src/plan.rs`, `src/shell.rs`) calls
 //! `record()` exactly once per write — success or failure — and never with a raw secret in
 //! `detail` (see `mask_secret`/`mask_uci_line`).
@@ -15,12 +15,34 @@ const MAX_LOG_LINES: usize = 1000;
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct AuditEntry {
+    #[serde(default)]
+    pub id: String,
     pub ts: u64,
     pub user: String,
     pub action: String,
     pub target: String,
     pub result: AuditResult,
     pub detail: String,
+    /// Structured, secret-masked UCI changes. Older audit rows omit this field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_changes: Vec<ConfigChange>,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct ConfigChange {
+    pub node: String,
+    pub config: String,
+    pub section: String,
+    pub option: String,
+    /// Values are display-safe; secret options are always replaced with bullets.
+    pub before: Option<String>,
+    pub after: Option<String>,
+    /// Restoration is supported only when both values are scalar and the option is not secret.
+    #[serde(default)]
+    pub restorable: bool,
+    /// This change created the whole section; restore removes it only after exact section match.
+    #[serde(default)]
+    pub restore_section: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -34,24 +56,39 @@ pub struct Audit {
     entries: Mutex<VecDeque<AuditEntry>>,
     disk_write: Mutex<()>,
     log_path: std::path::PathBuf,
+    next_id: std::sync::atomic::AtomicU64,
 }
 
 impl Default for Audit {
+    /// Create the audit log with its persistent router path.
     fn default() -> Self {
-        Self::new("/tmp/openwrtfi-audit.log".into())
+        Self::new("/etc/openwrtfi/audit.jsonl".into())
     }
 }
 
 impl Audit {
+    /// Load existing audit rows and initialize storage for the supplied log path.
     pub fn new(log_path: std::path::PathBuf) -> Self {
         Self {
             entries: Mutex::new(load_entries(&log_path)),
             disk_write: Mutex::new(()),
             log_path,
+            next_id: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
-    pub async fn record(&self, entry: AuditEntry) {
+    /// Add an entry to the in-memory history and append it to the disk log.
+    pub async fn record(&self, mut entry: AuditEntry) {
+        if entry.id.is_empty() {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default();
+            let seq = self
+                .next_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            entry.id = format!("{nanos:x}-{seq:x}");
+        }
         {
             let mut entries = self.entries.lock().await;
             entries.push_front(entry.clone());
@@ -73,6 +110,9 @@ impl Audit {
         let Ok(line) = serde_json::to_string(entry) else {
             return;
         };
+        if let Some(parent) = self.log_path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
         let existing = tokio::fs::read_to_string(&self.log_path)
             .await
             .unwrap_or_default();
@@ -118,10 +158,39 @@ pub fn mask_secret(_value: &str) -> &'static str {
     "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
 }
 
-/// `uci set <config>.<section>.<option>='<value>'`-style diff line, masking the value when
-/// `option` is one that carries a secret (`key`, `password`).
+/// Return whether a UCI option name matches the credential-name rules.
+pub fn is_sensitive_uci_option(option: &str) -> bool {
+    let option = option.to_ascii_lowercase();
+    matches!(
+        option.as_str(),
+        "key"
+            | "password"
+            | "preshared_key"
+            | "key1"
+            | "key2"
+            | "key3"
+            | "key4"
+            | "psk"
+            | "private_key"
+            | "auth_token"
+            | "token"
+            | "secret"
+            | "passphrase"
+    ) || [
+        "_password",
+        "_psk",
+        "_private_key",
+        "_auth_token",
+        "_token",
+        "_secret",
+    ]
+    .iter()
+    .any(|suffix| option.ends_with(suffix))
+}
+
+/// `uci set <config>.<section>.<option>='<value>'`-style diff line, masking credentials.
 pub fn mask_uci_line(config: &str, section: &str, option: &str, value: &str) -> String {
-    let shown = if matches!(option, "key" | "password") {
+    let shown = if is_sensitive_uci_option(option) {
         mask_secret(value)
     } else {
         value
@@ -139,12 +208,14 @@ mod tests {
 
     fn entry(ts: u64) -> AuditEntry {
         AuditEntry {
+            id: String::new(),
             ts,
             user: "root".into(),
             action: "kick".into(),
             target: "aa:bb".into(),
             result: AuditResult::Ok,
             detail: String::new(),
+            config_changes: vec![],
         }
     }
 
@@ -286,5 +357,38 @@ mod tests {
 
         let plain = mask_uci_line("wireless", "default_radio1", "ssid", "MyWiFi");
         assert!(plain.contains("MyWiFi"));
+    }
+
+    #[test]
+    /// Checks that common UCI credential option names are classified as sensitive.
+    fn masks_common_uci_secret_option_names() {
+        for option in [
+            "key",
+            "password",
+            "preshared_key",
+            "key1",
+            "key2",
+            "key3",
+            "key4",
+            "psk",
+            "private_key",
+            "auth_token",
+            "wpa_psk",
+        ] {
+            let line = mask_uci_line("wireless", "main", option, "raw-secret");
+            assert!(!line.contains("raw-secret"), "{option}");
+            assert!(line.contains("••••••••"), "{option}");
+        }
+    }
+
+    #[test]
+    /// Checks case-insensitive exact and suffix matching for sensitive option names.
+    fn sensitive_uci_option_names_are_matched_exactly_case_insensitively() {
+        for option in ["PRESHARED_KEY", "KEY1", "KEY2", "KEY3", "KEY4"] {
+            assert!(is_sensitive_uci_option(option), "{option}");
+        }
+        for option in ["key0", "key5", "preshared_key_backup"] {
+            assert!(!is_sensitive_uci_option(option), "{option}");
+        }
     }
 }

@@ -92,16 +92,19 @@ impl ShellTokens {
     }
 }
 
+/// Record a successful shell action in the audit history.
 async fn audit(state: &AppState, user: &str, action: &str, node: &str, detail: &str) {
     state
         .audit
         .record(AuditEntry {
+            id: String::new(),
             ts: now(),
             user: user.to_owned(),
             action: action.to_owned(),
             target: node.to_owned(),
             result: AuditResult::Ok,
             detail: detail.to_owned(),
+            config_changes: vec![],
         })
         .await;
 }
