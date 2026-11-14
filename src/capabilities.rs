@@ -89,7 +89,13 @@ pub async fn discover(
         result.actions.retain(|action| action != "node.reboot");
     }
 
-    result.packages = installed_packages(ubus).await?;
+    result.packages = match installed_packages(ubus).await {
+        Ok(packages) => packages,
+        // A denied package inventory is a missing capability, not a failed probe: keep the
+        // objects, services, and actions already discovered instead of failing the response.
+        Err(error) if package_inventory_denied(&error) => Vec::new(),
+        Err(error) => return Err(error),
+    };
     result.protocols = protocols_for(&result.packages);
     if let Ok(services) = ubus.call("service", "list", serde_json::json!({})).await
         && let Some(map) = services.as_object()
@@ -130,6 +136,12 @@ fn package_db_missing(error: &str) -> bool {
     // rpcd maps ENOENT to UBUS_STATUS_NOT_FOUND (4). Fixture/local reads retain the
     // operating-system ENOENT text in their error strings.
     error.contains("-> code 4") || error.contains("No such file or directory")
+}
+
+/// Return true for rpcd permission denials on the package databases, which leave the rest of
+/// the inventory usable (UBUS_STATUS_PERMISSION_DENIED).
+fn package_inventory_denied(error: &str) -> bool {
+    error.contains("-> code 6")
 }
 
 /// Select the first package database that yields a nonempty installed-package list.
@@ -208,8 +220,8 @@ fn protocols_for(packages: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        package_db_missing, parse_apk_packages, parse_opkg_packages, protocols_for,
-        select_package_database,
+        package_db_missing, package_inventory_denied, parse_apk_packages, parse_opkg_packages,
+        protocols_for, select_package_database,
     };
 
     #[test]
@@ -257,6 +269,18 @@ mod tests {
         ));
         assert!(!package_db_missing("rpcd 192.0.2.1: file.read -> code 8"));
         assert!(!package_db_missing("rpcd 192.0.2.1: file.read -> code 6"));
+    }
+
+    #[test]
+    /// Checks only permission denials degrade to an empty inventory; other failures still surface.
+    fn package_inventory_denial_is_distinguished_from_other_failures() {
+        assert!(package_inventory_denied(
+            "rpcd 192.0.2.1: file.read -> code 6"
+        ));
+        assert!(!package_inventory_denied(
+            "rpcd 192.0.2.1: file.read -> code 4"
+        ));
+        assert!(!package_inventory_denied("rpcd 192.0.2.1: HTTP 500"));
     }
 
     #[test]

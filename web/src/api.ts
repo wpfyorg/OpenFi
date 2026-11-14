@@ -113,14 +113,16 @@ export const patchRadio = (node: string, radio: string, body: RadioPatch) =>
   write<void>(`/nodes/${encodeURIComponent(node)}/radios/${encodeURIComponent(radio)}`, "POST", body);
 
 export type AdvancedUciSections = Record<string, Record<string, unknown>>;
-export interface AdvancedUciConfig { node: string; config: string; sections: AdvancedUciSections }
+// `revision` is an opaque token for the loaded config; the server rejects a preview or apply whose
+// token no longer matches, including when a masked credential changed on the node.
+export interface AdvancedUciConfig { node: string; config: string; revision: string; sections: AdvancedUciSections }
 export interface AdvancedUciPreview { node: string; config: string; changes: string[] }
 const uciPath = (node: string, config: string) => `/nodes/${encodeURIComponent(node)}/uci/${encodeURIComponent(config)}`;
 export const getAdvancedUci = (node: string, config: string) => req<AdvancedUciConfig>(uciPath(node, config));
-export const previewAdvancedUci = (node: string, config: string, base: AdvancedUciSections, sections: AdvancedUciSections) =>
-  write<AdvancedUciPreview>(`${uciPath(node, config)}/preview`, "POST", { base, sections });
-export const applyAdvancedUci = (node: string, config: string, base: AdvancedUciSections, sections: AdvancedUciSections) =>
-  write<{ ok: boolean; changes: string[] }>(`${uciPath(node, config)}/apply`, "POST", { base, sections });
+export const previewAdvancedUci = (node: string, config: string, revision: string, base: AdvancedUciSections, sections: AdvancedUciSections) =>
+  write<AdvancedUciPreview>(`${uciPath(node, config)}/preview`, "POST", { revision, base, sections });
+export const applyAdvancedUci = (node: string, config: string, revision: string, base: AdvancedUciSections, sections: AdvancedUciSections) =>
+  write<{ ok: boolean; changes: string[] }>(`${uciPath(node, config)}/apply`, "POST", { revision, base, sections });
 
 // ---- multi-node wifi plan ----
 export const planWifiNetwork = (id: string, body: WifiPlanRequest) =>
