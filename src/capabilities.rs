@@ -96,8 +96,12 @@ pub async fn discover(
     result.packages = match installed_packages(ubus).await {
         Ok(packages) => packages,
         // An unavailable package inventory is a missing capability, not a failed probe: keep the
-        // objects, services, and actions already discovered instead of failing the response.
-        Err(error) if package_inventory_unavailable(&error) => Vec::new(),
+        // objects, services, and actions already discovered instead of failing the response, but
+        // say why the inventory is empty rather than reporting it silently.
+        Err(error) if package_inventory_unavailable(&error) => {
+            log::warn!("package inventory unavailable: {error}");
+            Vec::new()
+        }
         Err(error) => return Err(error),
     };
     result.protocols = protocols_for(&result.packages);
@@ -120,10 +124,11 @@ async fn installed_packages(ubus: &Ubus) -> Result<Vec<String>, String> {
         return Ok(packages);
     }
     let opkg_database = read_optional_package_db(ubus, "/usr/lib/opkg/status").await?;
-    Ok(
-        select_package_database(apk_database.as_deref(), opkg_database.as_deref())
-            .unwrap_or_default(),
-    )
+    let selected = select_package_database(apk_database.as_deref(), opkg_database.as_deref());
+    if selected.is_none() {
+        log::warn!("no readable APK or opkg package database; package inventory will be empty");
+    }
+    Ok(selected.unwrap_or_default())
 }
 
 /// Read an optional package database without hiding real rpcd read failures.
@@ -212,7 +217,6 @@ fn protocols_for(packages: &[String]) -> Vec<String> {
         ("openvpn-wolfssl", "openvpn"),
         ("l2tp", "l2tp"),
         ("xl2tpd", "l2tp"),
-        ("ocserv", "openconnect"),
         ("openconnect", "openconnect"),
     ] {
         if packages.iter().any(|installed| installed == package) {
@@ -305,6 +309,16 @@ mod tests {
         assert_eq!(
             protocols_for(&packages),
             vec!["openvpn", "openvpn", "openvpn", "l2tp", "openconnect"]
+        );
+    }
+
+    #[test]
+    /// Checks the OpenConnect server package is not reported as the client protocol.
+    fn openconnect_server_does_not_report_the_client_protocol() {
+        assert_eq!(protocols_for(&["ocserv".to_owned()]), Vec::<String>::new());
+        assert_eq!(
+            protocols_for(&["openconnect".to_owned()]),
+            vec!["openconnect"]
         );
     }
 
