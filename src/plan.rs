@@ -544,6 +544,25 @@ async fn run_rollout(state: Arc<AppState>, user: String, record: Arc<RwLock<Plan
                             return Err(format!("could not verify rpcd ACL on {}: {e}", step.node));
                         }
                     }
+                    // Reject a baseline that moved since plan creation, so the audit and guarded
+                    // restore record the values this rollout actually replaced.
+                    let sections = uci_engine::read(ubus, "wireless")
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    for change in &step.changes {
+                        let current = sections.iter().find(|s| s.name == change.section);
+                        for (option, planned) in &change.before {
+                            let live = current
+                                .and_then(|section| section.options.get(option))
+                                .cloned();
+                            if &live != planned {
+                                return Err(format!(
+                                    "plan is stale: wireless.{}.{option} changed since it was created",
+                                    change.section
+                                ));
+                            }
+                        }
+                    }
                     for change in &step.changes {
                         uci_engine::update(ubus, "wireless", &change.section, &change.values)
                             .await

@@ -642,48 +642,55 @@ pub async fn set_radio(
         _ => None,
     };
     let target = format!("{node}/{radio}");
-    let old_section = uci_engine::read(ubus, "wireless")
-        .await
-        .ok()
-        .and_then(|sections| sections.into_iter().find(|section| section.name == radio));
-    let config_changes: Vec<ConfigChange> = values
-        .iter()
-        .map(|(option, after)| {
-            let before = old_section
-                .as_ref()
-                .and_then(|section| section.options.get(option));
-            let secret = matches!(
-                option.as_str(),
-                "key" | "password" | "psk" | "private_key" | "auth_token"
-            );
-            let show = |value: Option<&serde_json::Value>| {
-                value.map(|value| {
-                    if secret {
-                        audit::mask_secret("").to_owned()
-                    } else if let Some(text) = value.as_str() {
-                        text.to_owned()
-                    } else {
-                        value.to_string()
-                    }
-                })
-            };
-            ConfigChange {
-                node: node.clone(),
-                config: "wireless".into(),
-                section: radio.clone(),
-                option: option.clone(),
-                before: show(before),
-                after: show(Some(&after.to_wire())),
-                restorable: !secret
-                    && old_section.is_some()
-                    && before.is_none_or(|value| !value.is_array() && !value.is_object())
-                    && !matches!(after, UciValue::List(_)),
-                restore_section: false,
-            }
-        })
-        .collect();
+    // Built inside the transaction for real applies: a baseline read before the lock is taken can
+    // belong to another request, which would record the wrong "before" value for guarded restore.
+    let mut config_changes: Vec<ConfigChange> = Vec::new();
+    let build_changes = |old_section: Option<uci_engine::Section>| -> Vec<ConfigChange> {
+        values
+            .iter()
+            .map(|(option, after)| {
+                let before = old_section
+                    .as_ref()
+                    .and_then(|section| section.options.get(option));
+                let secret = matches!(
+                    option.as_str(),
+                    "key" | "password" | "psk" | "private_key" | "auth_token"
+                );
+                let show = |value: Option<&serde_json::Value>| {
+                    value.map(|value| {
+                        if secret {
+                            audit::mask_secret("").to_owned()
+                        } else if let Some(text) = value.as_str() {
+                            text.to_owned()
+                        } else {
+                            value.to_string()
+                        }
+                    })
+                };
+                ConfigChange {
+                    node: node.clone(),
+                    config: "wireless".into(),
+                    section: radio.clone(),
+                    option: option.clone(),
+                    before: show(before),
+                    after: show(Some(&after.to_wire())),
+                    restorable: !secret
+                        && old_section.is_some()
+                        && before.is_none_or(|value| !value.is_array() && !value.is_object())
+                        && !matches!(after, UciValue::List(_)),
+                    restore_section: false,
+                }
+            })
+            .collect()
+    };
     // Mock mode: same as `reserve` — no fixture models `uci set`/`apply`/`confirm` replies.
     let outcome: Result<(), String> = if state.mock.enabled() {
+        config_changes = build_changes(
+            uci_engine::read(ubus, "wireless")
+                .await
+                .ok()
+                .and_then(|sections| sections.into_iter().find(|section| section.name == radio)),
+        );
         Ok(())
     } else {
         async {
@@ -693,6 +700,12 @@ pub async fn set_radio(
                 30,
                 std::time::Duration::from_secs(3),
                 || async {
+                    let baseline = uci_engine::read(ubus, "wireless")
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .into_iter()
+                        .find(|section| section.name == radio);
+                    config_changes = build_changes(baseline);
                     uci_engine::update(ubus, "wireless", &radio, &values)
                         .await
                         .map_err(|e| e.to_string())

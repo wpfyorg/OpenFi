@@ -27,12 +27,24 @@ export function NodeCard({ node, wanIp, onOpenShell }: NodeCardProps) {
   const [rebootOpen, setRebootOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<NodeCapabilities | null>(null);
+  // A failed probe is distinct from a successful one that reports no capabilities; only the
+  // failure offers a retry, and coming back online re-runs discovery automatically.
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const [capabilityRetry, setCapabilityRetry] = useState(0);
   useEffect(() => {
     let current = true;
     setCapabilities(null);
-    getNodeCapabilities(node.name).then((value) => { if (current) setCapabilities(value); }, () => { if (current) setCapabilities(null); });
+    setCapabilityError(null);
+    getNodeCapabilities(node.name).then(
+      (value) => { if (current) { setCapabilities(value); setCapabilityError(null); } },
+      (e) => {
+        if (!current) return;
+        setCapabilities(null);
+        setCapabilityError(e instanceof Error ? e.message : "Capability discovery failed");
+      },
+    );
     return () => { current = false; };
-  }, [node.name]);
+  }, [node.name, node.online, capabilityRetry]);
   const supports = (action: string) => capabilities?.actions.includes(action) ?? false;
 
   const cpu = Math.min(99, Math.round(node.load[0] * 100));
@@ -150,6 +162,13 @@ export function NodeCard({ node, wanIp, onOpenShell }: NodeCardProps) {
       )}
 
       <div class="node-card-actions">
+        {capabilityError && <Button
+          icon="refresh-cw"
+          onClick={() => setCapabilityRetry((n) => n + 1)}
+          title={capabilityError}
+        >
+          Retry capabilities
+        </Button>}
         {supports("wifi.reload") && <Button
           icon="refresh-cw"
           onClick={restartWifi}

@@ -97,16 +97,27 @@ impl Ubus {
         let value = match self {
             Ubus::Fixture { .. } | Ubus::Cli => return Ok(true),
             Ubus::Rpcd(r) => {
-                let sid = r.session().await?;
-                r.call(
-                    "session",
-                    "access",
-                    access_args(&sid, scope, object, function),
-                )
-                .await?
+                r.call("session", "access", access_args(scope, object, function))
+                    .await?
             }
         };
         parse_access(&value)
+    }
+
+    /// A handle that authenticates separately from this one, for read-only inventory calls.
+    /// A denial there (or rpcd replacing a rejected request's SID) must not disturb the session an
+    /// in-flight UCI transaction is staging its writes on. Fixture and CLI handles are already
+    /// independent of any rpcd session, so they are returned as-is.
+    pub fn isolated_read_handle(&self) -> Self {
+        match self {
+            Ubus::Rpcd(r) => Ubus::Rpcd(Arc::new(Rpcd {
+                host: r.host.clone(),
+                username: r.username.clone(),
+                password: r.password.clone(),
+                session: Mutex::new(None),
+            })),
+            other => other.clone(),
+        }
     }
 
     /// Best-effort `session destroy` on rpcd (logout); a no-op for `Cli`/`Fixture`. Errors are
@@ -215,10 +226,10 @@ fn parse_access(value: &Value) -> Result<bool> {
         .ok_or_else(|| "rpcd session.access returned no boolean access result".to_owned())
 }
 
-/// Build the session-bound arguments for an rpcd `session.access` request.
-fn access_args(session_id: &str, scope: &str, object: &str, function: &str) -> Value {
+/// Build the arguments for an rpcd `session.access` request. The authenticated session travels in
+/// the outer ubus call envelope; repeating it as a method argument is rejected by uhttpd.
+fn access_args(scope: &str, object: &str, function: &str) -> Value {
     json!({
-        "ubus_rpc_session": session_id,
         "scope": scope,
         "object": object,
         "function": function,
@@ -368,12 +379,12 @@ mod acl_tests {
     }
 
     #[test]
-    /// Checks access requests carry the authenticated session identifier and target method.
-    fn session_access_request_is_bound_to_the_authenticated_session() {
+    /// Checks access requests carry only the arguments uhttpd accepts; the session is in the
+    /// outer call envelope, so passing it again here would make every probe fail.
+    fn session_access_request_carries_only_scope_target_and_function() {
         assert_eq!(
-            access_args("session-123", "uci", "wireless", "write"),
+            access_args("uci", "wireless", "write"),
             json!({
-                "ubus_rpc_session": "session-123",
                 "scope": "uci",
                 "object": "wireless",
                 "function": "write",

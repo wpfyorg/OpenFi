@@ -226,9 +226,9 @@ configuration, reboot, and shell controls appear only when that node reports the
 action (`wifi.reload`, `radio.configure`, `node.reboot`, `shell.open`). An unavailable or
 malformed probe yields no corresponding action. The protocol list recognizes protocols by
 their installed OpenWrt package names. Package discovery reads `/lib/apk/db/installed` first and
-falls back to `/usr/lib/opkg/status`; if neither yields a valid installed package set, or the
-session is denied `file.read` on them, packages and derived protocols are empty while the rest of
-the capability inventory is still returned.
+falls back to `/usr/lib/opkg/status`; if neither yields a valid installed package set, the session
+is denied `file.read` on them, or a database exceeds rpcd's 256 KiB `file.read` limit, packages and
+derived protocols are empty while the rest of the capability inventory is still returned.
 
 ### Multi-node WiFi change (the "apply plan")
 
@@ -244,7 +244,10 @@ the capability inventory is still returned.
 Refuses (`409`) while any target node is offline or another plan is running, and (`403`) when the
 plan was created by a different session. Before starting, apply re-checks every real node with the
 *applying* session's own rpcd handles — rejecting read-only nodes and nodes without both
-`uci:wireless.write` and a write session — and the rollout then uses those handles.
+`uci:wireless.write` and a write session — and the rollout then uses those handles. Each node's
+rollout step also re-reads the live wireless config under the transaction lock: if an option moved
+since the plan was created, that step fails with `plan is stale` instead of overwriting the
+intervening change and recording the planned value as the one it replaced.
 
 ## Browser shell (off by default)
 

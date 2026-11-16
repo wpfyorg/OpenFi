@@ -28,6 +28,10 @@ pub async fn discover(
     gateway: bool,
     shell_enabled: bool,
 ) -> Result<Capabilities, String> {
+    // Inventory runs on its own rpcd login: a denied or oversized file read must not drop the SID
+    // an in-flight UCI transaction is staging its writes on.
+    let handle = ubus.isolated_read_handle();
+    let ubus = &handle;
     let mut result = Capabilities::default();
     let Ok(objects) = ubus.list("*").await else {
         return Ok(result);
@@ -91,9 +95,9 @@ pub async fn discover(
 
     result.packages = match installed_packages(ubus).await {
         Ok(packages) => packages,
-        // A denied package inventory is a missing capability, not a failed probe: keep the
+        // An unavailable package inventory is a missing capability, not a failed probe: keep the
         // objects, services, and actions already discovered instead of failing the response.
-        Err(error) if package_inventory_denied(&error) => Vec::new(),
+        Err(error) if package_inventory_unavailable(&error) => Vec::new(),
         Err(error) => return Err(error),
     };
     result.protocols = protocols_for(&result.packages);
@@ -138,10 +142,11 @@ fn package_db_missing(error: &str) -> bool {
     error.contains("-> code 4") || error.contains("No such file or directory")
 }
 
-/// Return true for rpcd permission denials on the package databases, which leave the rest of
-/// the inventory usable (UBUS_STATUS_PERMISSION_DENIED).
-fn package_inventory_denied(error: &str) -> bool {
-    error.contains("-> code 6")
+/// Return true when an rpcd `file.read` rejection leaves the package databases unavailable while
+/// the rest of the inventory stays usable: a permission denial (UBUS_STATUS_PERMISSION_DENIED) or
+/// a database at or above rpcd's 256 KiB file.read limit (UBUS_STATUS_NOT_SUPPORTED).
+fn package_inventory_unavailable(error: &str) -> bool {
+    error.contains("-> code 6") || error.contains("-> code 8")
 }
 
 /// Select the first package database that yields a nonempty installed-package list.
@@ -220,7 +225,7 @@ fn protocols_for(packages: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        package_db_missing, package_inventory_denied, parse_apk_packages, parse_opkg_packages,
+        package_db_missing, package_inventory_unavailable, parse_apk_packages, parse_opkg_packages,
         protocols_for, select_package_database,
     };
 
@@ -272,15 +277,18 @@ mod tests {
     }
 
     #[test]
-    /// Checks only permission denials degrade to an empty inventory; other failures still surface.
-    fn package_inventory_denial_is_distinguished_from_other_failures() {
-        assert!(package_inventory_denied(
+    /// Checks denials and oversized databases degrade to an empty inventory; other failures surface.
+    fn package_inventory_unavailability_is_distinguished_from_other_failures() {
+        assert!(package_inventory_unavailable(
             "rpcd 192.0.2.1: file.read -> code 6"
         ));
-        assert!(!package_inventory_denied(
+        assert!(package_inventory_unavailable(
+            "rpcd 192.0.2.1: file.read -> code 8"
+        ));
+        assert!(!package_inventory_unavailable(
             "rpcd 192.0.2.1: file.read -> code 4"
         ));
-        assert!(!package_inventory_denied("rpcd 192.0.2.1: HTTP 500"));
+        assert!(!package_inventory_unavailable("rpcd 192.0.2.1: HTTP 500"));
     }
 
     #[test]

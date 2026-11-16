@@ -74,14 +74,23 @@ fn created_section_matches(changes: &[ConfigChange], sections: &[uci_engine::Sec
     };
     section.options.len() == expected.len()
         && expected.iter().all(|(option, value)| {
-            section.options.get(*option).is_some_and(|current| {
-                current
-                    .as_str()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| current.to_string())
-                    == *value
-            })
+            section
+                .options
+                .get(*option)
+                .and_then(scalar_text)
+                .as_deref()
+                == Some(*value)
         })
+}
+
+/// Render a live UCI value for scalar comparison. Lists and objects never match a scalar history
+/// value, even when their serialized text happens to be identical.
+fn scalar_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => None,
+        serde_json::Value::String(text) => Some(text.clone()),
+        other => Some(other.to_string()),
+    }
 }
 
 /// Compare a current option value with the post-change value stored in history.
@@ -244,11 +253,7 @@ pub async fn restore(
                     .iter()
                     .find(|s| s.name == diff.section)
                     .and_then(|s| s.options.get(&diff.option))
-                    .map(|v| {
-                        v.as_str()
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| v.to_string())
-                    });
+                    .and_then(scalar_text);
                 if !matches_after(current, &diff.after) {
                     return Err(format!(
                         "__restore_conflict__:{} changed since this history entry",
@@ -357,6 +362,17 @@ mod tests {
         second.node = "gateway".into();
         entry.config_changes.push(second);
         assert!(!restorable(&entry));
+    }
+
+    #[test]
+    /// Checks a live list never satisfies a scalar history value through equal serialized text.
+    fn list_values_do_not_match_scalar_history_text() {
+        assert_eq!(scalar_text(&serde_json::json!(["a", "b"])), None);
+        assert_eq!(scalar_text(&serde_json::json!("a")), Some("a".to_owned()));
+        assert!(!matches_after(
+            scalar_text(&serde_json::json!(["a", "b"])),
+            &Some("[\"a\",\"b\"]".to_owned())
+        ));
     }
 
     #[test]
