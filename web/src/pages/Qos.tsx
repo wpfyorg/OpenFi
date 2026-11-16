@@ -16,7 +16,8 @@ import type { Qos, QosClient, Snapshot } from "../types";
 const SECTION = "#F0873C";
 
 export default function QosPage() {
-  const { snap, connected } = useSnap();
+  const { snap, connected, permissions } = useSnap();
+  const gatewayPermissions = permissions[snap?.nodes.find((n) => n.role === "gateway")?.name ?? ""];
   const [override, setOverride] = useState<Record<string, boolean>>({});
 
   return (
@@ -112,7 +113,8 @@ function ClientUsageTable({
   qos, override, setOverride,
 }: { qos: Qos; override: Record<string, boolean>; setOverride: (fn: (m: Record<string, boolean>) => Record<string, boolean>) => void }) {
   const rows = [...qos.clients].sort((a, b) => b.month_bytes - a.month_bytes);
-  const { snap } = useSnap();
+  const { snap, permissions } = useSnap();
+  const gatewayPermissions = permissions[snap?.nodes.find((n) => n.role === "gateway")?.name ?? ""];
   const nameOf = new Map((snap?.clients ?? []).map((c) => [c.mac, c.hostname]));
   const tierLabel = new Map(qosTiers(qos).map((t) => [t.id, t.label]));
   return (
@@ -133,6 +135,7 @@ function ClientUsageTable({
               <span class="mono">{bytes(c.month_bytes)}</span>,
               <Toggle
                 checked={wl}
+                disabled={!gatewayPermissions?.whitelist}
                 onChange={(on) => {
                   setOverride((m) => ({ ...m, [c.mac]: on }));
                   whitelist(c.mac, c.mac, on, () => setOverride((m) => ({ ...m, [c.mac]: !on })));

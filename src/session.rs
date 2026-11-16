@@ -56,6 +56,49 @@ pub struct Session {
     /// session; actions against them should be refused with a clear error rather than silently
     /// falling back to a different transport.
     pub read_only: HashSet<String>,
+    /// ACL permissions checked against each authenticated rpcd session at sign-in.
+    pub permissions: HashMap<String, NodePermissions>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct NodePermissions {
+    pub read: bool,
+    pub radio_write: bool,
+    pub reserve: bool,
+    pub whitelist: bool,
+    pub kick: bool,
+    pub reboot: bool,
+    pub wifi_reload: bool,
+}
+
+impl NodePermissions {
+    /// Probe the ACL methods used by node actions and return their individual permissions.
+    pub async fn derive(ubus: &Ubus) -> Self {
+        /// Return false when rpcd denies a method or the permission probe fails.
+        async fn allowed(ubus: &Ubus, scope: &str, object: &str, function: &str) -> bool {
+            ubus.has_access(scope, object, function)
+                .await
+                .unwrap_or(false)
+        }
+        let (read, radio_write, reserve, whitelist, kick, reboot, wifi_reload) = tokio::join!(
+            allowed(ubus, "uci", "wireless", "read"),
+            allowed(ubus, "uci", "wireless", "write"),
+            allowed(ubus, "uci", "dhcp", "write"),
+            allowed(ubus, "ubus", "file", "exec"),
+            allowed(ubus, "ubus", "hostapd.*", "del_client"),
+            allowed(ubus, "ubus", "system", "reboot"),
+            allowed(ubus, "ubus", "network.wireless", "reload"),
+        );
+        Self {
+            read,
+            radio_write,
+            reserve,
+            whitelist,
+            kick,
+            reboot,
+            wifi_reload,
+        }
+    }
 }
 
 impl Session {
@@ -75,12 +118,17 @@ pub struct SessionStore {
 }
 
 impl SessionStore {
+    /// Create a session and cache each authenticated node's action permissions.
     pub async fn create(
         &self,
         user: String,
         node_ubus: HashMap<String, Ubus>,
         read_only: HashSet<String>,
     ) -> String {
+        let mut permissions = HashMap::new();
+        for (node, ubus) in &node_ubus {
+            permissions.insert(node.clone(), NodePermissions::derive(ubus).await);
+        }
         let token = random_token().await;
         let now = now_secs();
         let session = Arc::new(Session {
@@ -89,6 +137,7 @@ impl SessionStore {
             last_seen: AtomicU64::new(now),
             node_ubus,
             read_only,
+            permissions,
         });
         self.sessions.write().await.insert(token.clone(), session);
         token
@@ -261,6 +310,21 @@ pub async fn auth_mw(
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    #[tokio::test]
+    /// Checks fixture sessions expose the trusted mock permissions for their node.
+    async fn fixture_session_exposes_mock_permissions() {
+        let store = SessionStore::default();
+        let node_ubus = HashMap::from([(
+            "gateway".to_owned(),
+            Ubus::fixture(std::path::PathBuf::new()),
+        )]);
+        let token = store.create("root".into(), node_ubus, HashSet::new()).await;
+        let session = store.touch(&token).await.unwrap();
+        let perms = session.permissions.get("gateway").unwrap();
+        assert!(perms.read && perms.radio_write && perms.reserve);
+        assert!(perms.whitelist && perms.kick && perms.reboot && perms.wifi_reload);
+    }
 
     #[tokio::test]
     async fn create_and_touch_round_trips() {

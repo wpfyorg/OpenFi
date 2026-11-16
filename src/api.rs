@@ -3,7 +3,7 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{Request, StatusCode, Uri, header},
     middleware,
     middleware::Next,
@@ -19,7 +19,7 @@ use serde_json::json;
 use tokio_stream::wrappers::WatchStream;
 
 use crate::{
-    AppState, actions, auth, collectors,
+    AppState, actions, advanced_uci, auth, capabilities, collectors, config_history,
     diag::{self, DiagRequest},
     model::RatePoint,
     nodes_api, plan, session, shell, web,
@@ -40,9 +40,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/wifi/networks", get(wifi_networks))
         .route("/api/v1/logs", get(logs))
         .route("/api/v1/audit", get(audit))
+        .route("/api/v1/config-history", get(config_history::list))
+        .route(
+            "/api/v1/config-history/{id}/restore",
+            post(config_history::restore),
+        )
         .route("/api/v1/diag", post(diag_handler))
         // Persistent controller node configuration
         .route("/api/v1/nodes", get(nodes_api::list).post(nodes_api::add))
+        .route("/api/v1/nodes/{node}/capabilities", get(node_capabilities))
         .route("/api/v1/nodes/{node}/remove", post(nodes_api::remove))
         // Auth
         .route("/api/v1/auth/login", post(auth::login))
@@ -60,6 +66,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/nodes/{node}/radios/{radio}",
             post(actions::set_radio),
+        )
+        .route(
+            "/api/v1/nodes/{node}/uci/{config}",
+            get(advanced_uci::read_config),
+        )
+        .route(
+            "/api/v1/nodes/{node}/uci/{config}/preview",
+            post(advanced_uci::preview),
+        )
+        .route(
+            "/api/v1/nodes/{node}/uci/{config}/apply",
+            post(advanced_uci::apply),
         )
         // Multi-node WiFi plan
         .route("/api/v1/wifi/networks/{id}/plan", post(plan::create_plan))
@@ -201,9 +219,84 @@ async fn usage_daily(State(s): State<Arc<AppState>>, Query(q): Query<UsageDailyQ
     Json(rows).into_response()
 }
 
-async fn wifi_networks(State(s): State<Arc<AppState>>) -> Response {
+/// Return wireless networks from nodes the caller may read.
+async fn wifi_networks(
+    State(s): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<Arc<session::Session>>,
+) -> Response {
+    let mut nodes = Vec::with_capacity(s.nodes.len());
+    for (node, _) in &s.nodes {
+        let Some(ubus) = session.node_ubus.get(&node.name) else {
+            continue;
+        };
+        match ubus.has_access("uci", "wireless", "read").await {
+            Ok(true) => {}
+            Ok(false) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({ "error": format!("rpcd ACL denies uci:wireless.read on {}", node.name) })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({ "error": format!("could not verify rpcd ACL on {}: {e}", node.name) })),
+                )
+                    .into_response();
+            }
+        }
+        nodes.push((node.clone(), ubus.clone()));
+    }
     let clients = s.snapshot.read().await.clients.clone();
-    Json(collectors::wifi_networks::collect(&s.nodes, &clients).await).into_response()
+    Json(collectors::wifi_networks::collect(&nodes, &clients).await).into_response()
+}
+
+/// Report the actions and services detected on one authenticated node.
+async fn node_capabilities(
+    State(s): State<Arc<AppState>>,
+    axum::Extension(session): axum::Extension<Arc<session::Session>>,
+    Path(node): Path<String>,
+) -> Response {
+    let Some((config, _)) = s.nodes.iter().find(|(config, _)| config.name == node) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("unknown node {node:?}")})),
+        )
+            .into_response();
+    };
+    let Some(ubus) = session.node_ubus.get(&node) else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": format!("no authenticated rpcd session for {node}") })),
+        )
+            .into_response();
+    };
+    match ubus.has_access("uci", "wireless", "read").await {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": format!("rpcd ACL denies uci:wireless.read on {node}") })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": format!("could not verify rpcd ACL on {node}: {e}") })),
+            )
+                .into_response();
+        }
+    }
+    match capabilities::discover(ubus, config.transport == "local", s.config.shell.enabled).await {
+        Ok(capabilities) => Json(capabilities).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("capability discovery failed: {error}") })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Deserialize)]

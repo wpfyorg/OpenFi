@@ -53,6 +53,14 @@ export interface Node {
   links: Link[];
 }
 
+export interface NodeCapabilities {
+  packages: string[];
+  ubus_objects: { name: string; methods: string[] }[];
+  protocols: string[];
+  services: string[];
+  actions: string[];
+}
+
 export interface Client {
   mac: string; ip: string | null; hostname: string | null;
   online: boolean;
@@ -122,6 +130,16 @@ export interface Snapshot {
   health: Health;
 }
 
+export interface NodePermissions {
+  read: boolean;
+  radio_write: boolean;
+  reserve: boolean;
+  whitelist: boolean;
+  kick: boolean;
+  reboot: boolean;
+  wifi_reload: boolean;
+}
+
 // ---- read endpoints ----
 
 export interface DailyUsage { day: string; rx_bytes: number; tx_bytes: number; devices: number }
@@ -151,7 +169,15 @@ export type LogLevel = "info" | "warn" | "err";
 export interface LogLine { ts: number; node: string; level: LogLevel; source: string; msg: string }
 
 export type AuditResult = "ok" | "error";
-export interface AuditEntry { ts: number; user: string; action: string; target: string; result: AuditResult; detail: string | null }
+export interface ConfigChange {
+  node: string; config: string; section: string; option: string;
+  before: string | null; after: string | null; restorable: boolean;
+  restore_section: boolean;
+}
+export interface AuditEntry {
+  id: string; ts: number; user: string; action: string; target: string;
+  result: AuditResult; detail: string | null; config_changes?: ConfigChange[];
+}
 
 // ---- diagnostics ----
 
@@ -163,7 +189,7 @@ export interface DiagResult { output: string; exit_code: number }
 
 export interface LoginRequest { username: string; password: string }
 export interface LoginResponse { user: string }
-export interface MeResponse { user: string; expires: number }
+export interface MeResponse { user: string; expires: number; permissions: Record<string, NodePermissions> }
 
 // ---- actions ----
 

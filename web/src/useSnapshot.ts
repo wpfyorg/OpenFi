@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { getMe } from "./api";
-import type { Snapshot } from "./types";
+import type { MeResponse, Snapshot } from "./types";
 
 export type ConnState = "connecting" | "live" | "reconnecting" | "offline";
 
@@ -12,9 +12,15 @@ const MAX_BACKOFF_MS = 15000;
  * EventSource can't see status codes, so on a drop it probes `/auth/me`: a 401 means the session
  * is gone (api.ts then sends the user to login) and the stream stops instead of retrying.
  */
-export function useSnapshot(enabled = true) {
+export function useSnapshot(
+  enabled = true,
+  /** Receives each successful reconnect probe, so permissions recover with the stream. */
+  onAuthProbe?: (me: MeResponse) => void,
+) {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [state, setState] = useState<ConnState>("connecting");
+  const probe = useRef(onAuthProbe);
+  probe.current = onAuthProbe;
   const attempt = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const es = useRef<EventSource | undefined>(undefined);
@@ -43,7 +49,8 @@ export function useSnapshot(enabled = true) {
         if (stopped) return;
         setState("reconnecting");
         try {
-          await getMe();
+          const me = await getMe();
+          probe.current?.(me);
         } catch (e) {
           if ((e as { status?: number }).status === 401) {
             stopped = true;

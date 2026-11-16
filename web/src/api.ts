@@ -3,7 +3,7 @@
 import type {
   AuditEntry, DailyUsage, DiagRequest, DiagResult, KickRequest, LoginRequest, LoginResponse,
   LogLine, MeResponse, Plan, PlanStatus, RadioPatch, RatePoint, ReserveRequest, Snapshot,
-  WhitelistRequest, WifiNetwork, WifiPlanRequest,
+  WhitelistRequest, WifiNetwork, WifiPlanRequest, NodeCapabilities,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -66,6 +66,9 @@ export const getLogs = (opts: { node?: string; lines?: number } = {}) => {
   return req<LogLine[]>(`/logs?${p}`);
 };
 export const getAudit = () => req<AuditEntry[]>("/audit");
+export const getConfigHistory = () => req<AuditEntry[]>("/config-history");
+export const restoreConfigHistory = (id: string) =>
+  write<{ ok: boolean }>(`/config-history/${encodeURIComponent(id)}/restore`, "POST");
 
 // ---- controller nodes ----
 export interface ConfiguredNode {
@@ -84,6 +87,7 @@ export interface AddNodeRequest {
   wired_uplink?: string;
 }
 export const getConfiguredNodes = () => req<ConfiguredNode[]>("/nodes");
+export const getNodeCapabilities = (node: string) => req<NodeCapabilities>(`/nodes/${encodeURIComponent(node)}/capabilities`);
 export const addConfiguredNode = (body: AddNodeRequest) => write<ConfiguredNode>("/nodes", "POST", body);
 export const removeConfiguredNode = (name: string) =>
   write<{ removed: string }>(`/nodes/${encodeURIComponent(name)}/remove`, "POST");
@@ -107,6 +111,18 @@ export const rebootNode = (node: string) => write<void>(`/nodes/${encodeURICompo
 export const reloadWifi = (node: string) => write<void>(`/nodes/${encodeURIComponent(node)}/wifi/reload`, "POST");
 export const patchRadio = (node: string, radio: string, body: RadioPatch) =>
   write<void>(`/nodes/${encodeURIComponent(node)}/radios/${encodeURIComponent(radio)}`, "POST", body);
+
+export type AdvancedUciSections = Record<string, Record<string, unknown>>;
+// `revision` is an opaque token for the loaded config; the server rejects a preview or apply whose
+// token no longer matches, including when a masked credential changed on the node.
+export interface AdvancedUciConfig { node: string; config: string; revision: string; sections: AdvancedUciSections }
+export interface AdvancedUciPreview { node: string; config: string; changes: string[] }
+const uciPath = (node: string, config: string) => `/nodes/${encodeURIComponent(node)}/uci/${encodeURIComponent(config)}`;
+export const getAdvancedUci = (node: string, config: string) => req<AdvancedUciConfig>(uciPath(node, config));
+export const previewAdvancedUci = (node: string, config: string, revision: string, base: AdvancedUciSections, sections: AdvancedUciSections) =>
+  write<AdvancedUciPreview>(`${uciPath(node, config)}/preview`, "POST", { revision, base, sections });
+export const applyAdvancedUci = (node: string, config: string, revision: string, base: AdvancedUciSections, sections: AdvancedUciSections) =>
+  write<{ ok: boolean; changes: string[] }>(`${uciPath(node, config)}/apply`, "POST", { revision, base, sections });
 
 // ---- multi-node wifi plan ----
 export const planWifiNetwork = (id: string, body: WifiPlanRequest) =>

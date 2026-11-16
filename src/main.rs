@@ -5,17 +5,21 @@
 //! endpoint that LuCI already exposes — so the APs need nothing installed.
 
 mod actions;
+mod advanced_uci;
 mod api;
 mod audit;
 mod auth;
+mod capabilities;
 mod collectors;
 mod config;
+mod config_history;
 mod diag;
 mod http;
 mod mock;
 mod model;
 mod nodes_api;
 mod plan;
+mod safe_apply;
 mod session;
 mod shell;
 #[cfg(test)]

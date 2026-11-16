@@ -91,6 +91,35 @@ impl Ubus {
         }
     }
 
+    /// Ask the authenticated rpcd session whether LuCI-style ACL grants this operation.
+    /// Fixture and local CLI transports represent the trusted mock/controller context.
+    pub async fn has_access(&self, scope: &str, object: &str, function: &str) -> Result<bool> {
+        let value = match self {
+            Ubus::Fixture { .. } | Ubus::Cli => return Ok(true),
+            Ubus::Rpcd(r) => {
+                r.call("session", "access", access_args(scope, object, function))
+                    .await?
+            }
+        };
+        parse_access(&value)
+    }
+
+    /// A handle that authenticates separately from this one, for read-only inventory calls.
+    /// A denial there (or rpcd replacing a rejected request's SID) must not disturb the session an
+    /// in-flight UCI transaction is staging its writes on. Fixture and CLI handles are already
+    /// independent of any rpcd session, so they are returned as-is.
+    pub fn isolated_read_handle(&self) -> Self {
+        match self {
+            Ubus::Rpcd(r) => Ubus::Rpcd(Arc::new(Rpcd {
+                host: r.host.clone(),
+                username: r.username.clone(),
+                password: r.password.clone(),
+                session: Mutex::new(None),
+            })),
+            other => other.clone(),
+        }
+    }
+
     /// Best-effort `session destroy` on rpcd (logout); a no-op for `Cli`/`Fixture`. Errors are
     /// swallowed by the caller — a session the router already reaped is not a logout failure.
     pub async fn destroy_session(&self) {
@@ -136,6 +165,75 @@ impl Ubus {
             }
         }
     }
+
+    /// Return the methods exposed by one ubus object. rpcd's `list` JSON-RPC method returns
+    /// the same object-to-signature map as `ubus -v list`; malformed replies are rejected.
+    pub async fn methods(&self, object: &str) -> Result<Vec<String>> {
+        match self {
+            Ubus::Cli => {
+                let out = tokio::process::Command::new("ubus")
+                    .args(["-v", "list", object])
+                    .output()
+                    .await
+                    .map_err(|e| format!("ubus: {e}"))?;
+                if !out.status.success() {
+                    return Err(format!("ubus -v list {object} failed"));
+                }
+                let body = String::from_utf8_lossy(&out.stdout);
+                Ok(body
+                    .lines()
+                    .filter_map(|line| {
+                        let line = line.trim();
+                        let (name, _) = line.split_once('{')?;
+                        let name = name
+                            .trim()
+                            .trim_end_matches(':')
+                            .trim()
+                            .trim_matches(['\'', '"']);
+                        (!name.is_empty()).then(|| name.to_owned())
+                    })
+                    .collect())
+            }
+            Ubus::Rpcd(r) => {
+                let value = r.rpc("list", json!([object])).await?;
+                let methods = value
+                    .get(object)
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| format!("invalid ubus list response for {object}"))?;
+                Ok(methods.keys().cloned().collect())
+            }
+            Ubus::Fixture { .. } => Err("method inventory unavailable in fixture mode".into()),
+        }
+    }
+
+    /// Read a router file through the rpcd `file` object. Used only for read-only inventory
+    /// files; path and response shape are validated by the caller.
+    pub async fn read_file(&self, path: &str) -> Result<String> {
+        let reply = self.call("file", "read", json!({"path": path})).await?;
+        reply
+            .get("data")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("invalid file.read response for {path}"))
+    }
+}
+
+/// Parse rpcd's boolean `session.access` response, rejecting missing or malformed results.
+fn parse_access(value: &Value) -> Result<bool> {
+    value
+        .get("access")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "rpcd session.access returned no boolean access result".to_owned())
+}
+
+/// Build the arguments for an rpcd `session.access` request. The authenticated session travels in
+/// the outer ubus call envelope; repeating it as a method argument is rejected by uhttpd.
+fn access_args(scope: &str, object: &str, function: &str) -> Value {
+    json!({
+        "scope": scope,
+        "object": object,
+        "function": function,
+    })
 }
 
 impl Rpcd {
@@ -264,5 +362,33 @@ fn animate(v: &mut Value, t: f64) {
         if let Some(tx) = stats.get_mut("tx_bytes") {
             grow(tx, 2_800_000.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod acl_tests {
+    use super::*;
+
+    #[test]
+    /// Checks explicit access results and fail-closed parsing of malformed replies.
+    fn session_access_result_is_explicit_and_malformed_results_fail_closed() {
+        assert_eq!(parse_access(&json!({"access": true})), Ok(true));
+        assert_eq!(parse_access(&json!({"access": false})), Ok(false));
+        assert!(parse_access(&json!({})).is_err());
+        assert!(parse_access(&json!({"access": "yes"})).is_err());
+    }
+
+    #[test]
+    /// Checks access requests carry only the arguments uhttpd accepts; the session is in the
+    /// outer call envelope, so passing it again here would make every probe fail.
+    fn session_access_request_carries_only_scope_target_and_function() {
+        assert_eq!(
+            access_args("uci", "wireless", "write"),
+            json!({
+                "scope": "uci",
+                "object": "wireless",
+                "function": "write",
+            })
+        );
     }
 }
